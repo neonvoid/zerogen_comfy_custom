@@ -23,10 +23,18 @@ Clone into `ComfyUI/custom_nodes/`:
 cd ComfyUI/custom_nodes
 git clone https://github.com/neonvoid/zerogen_comfy_custom.git
 pip install -r zerogen_comfy_custom/requirements.txt   # aiohttp, boto3 (torch/numpy/Pillow come with ComfyUI)
+cp zerogen_comfy_custom/.env.example zerogen_comfy_custom/.env   # then fill in credentials
 ```
 
-Set credentials via env / `.env` (see `src/zerogen_utils/api_keys.py`): `ARK_API_KEY`
-for generation; Access Key (AK/SK) for the asset library; optional B2 creds for staging.
+Credentials: copy [.env.example](.env.example) → `.env` and fill it in — `ARK_API_KEY`
+for generation, Access Key (`ARK_ACCESS_KEY`/`ARK_SECRET_KEY`) for the asset library,
+optional B2 creds for staging.
+
+## Docs
+
+- **[BEST_PRACTICES.md](BEST_PRACTICES.md)** — intro, setup, the asset→generation flow,
+  SD2 prompting + reference-video best practices, model limits, troubleshooting.
+- **[VENDOR.md](VENDOR.md)** — vendored-file list + drift-sync policy.
 
 ## Relationship to NV_Comfy_Utils
 
