@@ -1,0 +1,4 @@
+# ComfyUI already provides torch, numpy, Pillow, aiohttp at runtime.
+# Listed here for standalone/dev installs.
+aiohttp
+boto3

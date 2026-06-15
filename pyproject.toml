@@ -1,0 +1,13 @@
+[project]
+name = "zerogen_comfy_custom"
+version = "0.1.0"
+description = "Native BytePlus / Volcengine Ark Seedance 2.0 ComfyUI nodes (asset library, native generation, chunked loop)."
+requires-python = ">=3.9"
+dependencies = [
+    "aiohttp",
+    "boto3",
+]
+
+[tool.comfy]
+PublisherId = "neonvoid"
+DisplayName = "zerogen_comfy_custom"
