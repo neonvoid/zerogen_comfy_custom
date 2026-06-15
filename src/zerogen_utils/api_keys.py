@@ -155,8 +155,19 @@ def resolve_b2_credentials(
         raise RuntimeError(
             "No B2 credentials. Either:\n"
             "  - Set B2_KEY_ID and B2_APPLICATION_KEY environment variables, or\n"
-            "  - Add them to Comfy_Utils/.env file, or\n"
+            "  - Add them to your .env file, or\n"
             "  - Paste them into the node's b2_key_id / b2_application_key inputs."
+        )
+
+    if not resolved_bucket:
+        raise RuntimeError(
+            "No B2 bucket configured (there is no default). Set your Backblaze B2 "
+            "bucket name via:\n"
+            "  - the B2_BUCKET environment variable, or\n"
+            "  - a B2_BUCKET=<your-bucket> line in your .env file, or\n"
+            "  - the node's b2_bucket input.\n"
+            "B2 staging is required because CreateAsset is URL-pull only (it can't "
+            "accept local files directly)."
         )
 
     return resolved_id, resolved_key, resolved_bucket, resolved_region
