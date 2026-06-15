@@ -1,23 +1,23 @@
-"""NV BytePlus Seedance Gen — native generation on the BytePlus INTERNATIONAL
+"""BytePlus Seedance Gen — native generation on the BytePlus INTERNATIONAL
 endpoint (ap-southeast), consuming asset:// refs from the BytePlus register nodes.
 
 This is the generation half of the console-free native pipeline. It pairs with
-NV_ByteplusImageAssetRegister / NV_ByteplusImageBatchRegister: their asset://
+Zerogen_ByteplusImageAssetRegister / Zerogen_ByteplusImageBatchRegister: their asset://
 output wires straight into `ref_image_asset_urls` here, and this node submits the
 generation against the SAME library/endpoint the assets were registered on.
 
-Platform note (the whole reason this is a separate node from NV_SeedanceNativeRefVideo_V2):
-- NV_SeedanceNativeRefVideo_V2 → ark.cn-beijing.volces.com, `doubao-` models = Volcengine MAINLAND.
+Platform note (the whole reason this is a separate node from Zerogen_SeedanceNativeRefVideo_V2):
+- Zerogen_SeedanceNativeRefVideo_V2 → ark.cn-beijing.volces.com, `doubao-` models = Volcengine MAINLAND.
 - THIS node → ark.ap-southeast.bytepluses.com, `dreamina-` models = BytePlus INTERNATIONAL.
 These are different platforms with SEPARATE asset libraries; a BytePlus asset://
 id is only valid on the international endpoint. Runtime-validated end-to-end
-2026-06-11 (probe D:/tmp/byteplus_gen_smoke.py: asset:// ref → 720p succeeded).
+2026-06-11 (probe an internal smoke probe: asset:// ref → 720p succeeded).
 
 Refs are URL strings (asset:// / HTTPS / data: URI) — NOT a tensor upload_config.
 That matches how the register nodes and the Moyu chunked loop pass refs, so this
 slots into the same graph position as the Moyu workflow's generation node.
 
-Self-contained (own copies of the post/poll/error infra) per the operator's
+Self-contained (own copies of the post/poll/error infra) per the our
 "BytePlus stays a separate node group" constraint — the mainland nodes are
 untouched.
 """
@@ -118,7 +118,7 @@ def _classify_http_error(status_code: int, body_text: str) -> str:
         if "sensitive" in body_low or "privacyinformation" in body_low or "real person" in body_low:
             hints.append(
                 "400 — INPUT content gate. Real-face refs are input-gated on the native endpoint; "
-                "register the face via NV_ByteplusImageAssetRegister (Virtual Portrait / AIGC group) "
+                "register the face via Zerogen_ByteplusImageAssetRegister (Virtual Portrait / AIGC group) "
                 "and pass the asset:// id instead of a direct image URL."
             )
         elif "asset" in body_low and ("not found" in body_low or "notfound" in body_low):
@@ -224,10 +224,10 @@ async def _poll_task(session, api_key, task_id, interval, timeout):
                 raise RuntimeError(
                     f"BytePlus Seedance poll failed {consecutive_failures}× consecutively — likely a real "
                     f"outage. task_id={task_id}. Last error: {type(e).__name__}: {e}. "
-                    f"Re-run with NV_SeedanceFetchTask once connectivity recovers."
+                    f"Re-run with Zerogen_SeedanceFetchTask once connectivity recovers."
                 ) from e
             backoff = min(_POLL_RETRY_BACKOFF_CAP_S, 2.0 * consecutive_failures)
-            print(f"[NV_ByteplusSeedanceGen] poll #{consecutive_failures} transient error "
+            print(f"[Zerogen_ByteplusSeedanceGen] poll #{consecutive_failures} transient error "
                   f"({type(e).__name__}: {e}); retrying in {backoff:.1f}s. task_id={task_id}")
             elapsed = 0.0
             while elapsed < backoff:
@@ -240,7 +240,7 @@ async def _poll_task(session, api_key, task_id, interval, timeout):
         consecutive_failures = 0
         status = resp.get("status")
         if status != last_status:
-            print(f"[NV_ByteplusSeedanceGen] status: {status}")
+            print(f"[Zerogen_ByteplusSeedanceGen] status: {status}")
             last_status = status
         if status in ("succeeded", "failed", "expired", "cancelled"):
             return resp
@@ -384,7 +384,7 @@ async def _generate_one(
     poll_interval_s: float,
     poll_timeout_s: float,
     resolved_key: str,
-    log_tag: str = "NV_ByteplusSeedanceGen",
+    log_tag: str = "Zerogen_ByteplusSeedanceGen",
 ) -> dict:
     """Submit one gen task → poll → download → decode → retime-restore.
 
@@ -435,7 +435,7 @@ async def _generate_one(
         if code and ("SensitiveContent" in str(code) or "PolicyViolation" in str(code)):
             extra = (
                 " — OUTPUT content gate (post-generation, copyright/likeness). NOT the input gate and "
-                "NOT asset-library-bypassable; it is face/IP-driven. See memory sd2_output_content_gate."
+                "NOT asset-library-bypassable; it is face/IP-driven."
             )
         raise RuntimeError(
             f"BytePlus Seedance task ended status={status}. error.code={code!r} error.message={msg!r}.{extra} "
@@ -453,7 +453,7 @@ async def _generate_one(
     except Exception as e:
         raise RuntimeError(
             f"BytePlus task SUCCEEDED but video download failed — the generation is billed and the video "
-            f"exists server-side. task_id={task_id}. Recover with NV_SeedanceFetchTask. "
+            f"exists server-side. task_id={task_id}. Recover with Zerogen_SeedanceFetchTask. "
             f"Error: {type(e).__name__}: {e}"
         ) from e
 
@@ -508,7 +508,7 @@ async def _generate_one(
 # ---------------------------------------------------------------------------
 
 
-class NV_ByteplusSeedanceGen(IO.ComfyNode):
+class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
     """Generate a Seedance 2.0 video on the BytePlus international endpoint.
 
     Pair with the BytePlus register nodes: wire their asset:// output into
@@ -519,13 +519,13 @@ class NV_ByteplusSeedanceGen(IO.ComfyNode):
     @classmethod
     def define_schema(cls) -> IO.Schema:
         return IO.Schema(
-            node_id="NV_ByteplusSeedanceGen",
-            display_name="NV BytePlus Seedance Gen",
-            category="NV_Utils/api",
+            node_id="Zerogen_ByteplusSeedanceGen",
+            display_name="BytePlus Seedance Gen",
+            category="zerogen",
             description=(
                 "Generate a Seedance 2.0 video on the BytePlus INTERNATIONAL endpoint "
                 "(ark.ap-southeast.bytepluses.com, dreamina- models). Consumes asset:// "
-                "refs from NV_ByteplusImage(Batch)AssetRegister — the console-free "
+                "refs from ByteplusImage(Batch)AssetRegister — the console-free "
                 "real-face path. Refs are URL strings (asset:// / HTTPS / data:). Uses "
                 "the Bearer ARK_API_KEY from env / .env."
             ),
@@ -542,7 +542,7 @@ class NV_ByteplusSeedanceGen(IO.ComfyNode):
                     multiline=True,
                     tooltip=(
                         "Newline-separated image refs (1-9), one per line, in @Image1..N order. "
-                        "Wire NV_ByteplusImageBatchRegister.joined_urls here. Each is an asset:// id "
+                        "Wire Zerogen_ByteplusImageBatchRegister.joined_urls here. Each is an asset:// id "
                         "(or HTTPS URL / data: URI). Real-face refs MUST be asset:// (direct image "
                         "URLs are input-gated). Takes priority over the singular widget."
                     ),
@@ -610,7 +610,7 @@ class NV_ByteplusSeedanceGen(IO.ComfyNode):
                     min=60.0,
                     max=7200.0,
                     step=30.0,
-                    tooltip="Max seconds to wait. On timeout the task_id is logged — recover later with NV_SeedanceFetchTask.",
+                    tooltip="Max seconds to wait. On timeout the task_id is logged — recover later with Zerogen_SeedanceFetchTask.",
                 ),
                 IO.String.Input(
                     "api_key",
@@ -626,7 +626,7 @@ class NV_ByteplusSeedanceGen(IO.ComfyNode):
                         "manual = use the duration slider. model_auto = send -1 (model picks). "
                         "auto_from_ref = output length = ceil(ref_duration_s) clamped 4-15, so the output "
                         "matches the reference clip (prevents Seedance inventing extra time past the ref "
-                        "motion — the 'weird cuts' artifact). Wire ref_duration_s from NV_VIDEOINFO.duration."
+                        "motion — the 'weird cuts' artifact). Wire ref_duration_s from VIDEOINFO.duration."
                     ),
                     optional=True,
                 ),
@@ -724,7 +724,7 @@ class NV_ByteplusSeedanceGen(IO.ComfyNode):
         effective_ref_dur = _measure_video_duration(ref_video) or float(ref_duration_s or 0.0)
         api_duration, duration_note = _resolve_duration(duration_mode, duration, effective_ref_dur)
 
-        print(f"[NV_ByteplusSeedanceGen] model={model_id} res={resolution} ratio={ratio} "
+        print(f"[Zerogen_ByteplusSeedanceGen] model={model_id} res={resolution} ratio={ratio} "
               f"dur={api_duration}s [{duration_note}] slowdown={slowdown_factor} "
               f"refs(img={n_images} vid={'y' if has_video else 'n'}) gen_audio={generate_audio}"
               f"{' (tags auto-injected)' if tag_injected else ''}")
@@ -817,9 +817,9 @@ class NV_ByteplusSeedanceGen(IO.ComfyNode):
 # ---------------------------------------------------------------------------
 
 NODE_CLASS_MAPPINGS = {
-    "NV_ByteplusSeedanceGen": NV_ByteplusSeedanceGen,
+    "Zerogen_ByteplusSeedanceGen": Zerogen_ByteplusSeedanceGen,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NV_ByteplusSeedanceGen": "NV BytePlus Seedance Gen",
+    "Zerogen_ByteplusSeedanceGen": "BytePlus Seedance Gen",
 }

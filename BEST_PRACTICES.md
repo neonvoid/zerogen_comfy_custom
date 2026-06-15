@@ -24,10 +24,10 @@ different credentials:
 The canonical flow is **register → wait Active → generate**:
 
 ```
-[NV_ByteplusImageBatchRegister]  →  asset://… ids
+[Zerogen_ByteplusImageBatchRegister]  →  asset://… ids
             │  (poll until status = Active)
             ▼
-[NV_ByteplusSeedanceGen]  ──→  video
+[Zerogen_ByteplusSeedanceGen]  ──→  video
    text prompt refers to assets as @Image1 / @Video1 …
 ```
 
@@ -40,7 +40,7 @@ The canonical flow is **register → wait Active → generate**:
    - `ARK_API_KEY` — generation.
    - `ARK_ACCESS_KEY` / `ARK_SECRET_KEY` — asset library (different from the API key!).
    - `B2_*` — optional, only if you stage local media to a URL before registering.
-3. Restart ComfyUI. Nodes appear under the `NV_Utils` categories (ids unchanged from NV_Comfy_Utils, so existing workflows keep working).
+3. Restart ComfyUI. The nodes appear in the node menu under **`zerogen`** (search "Seedance" or "Byteplus").
 
 ---
 
@@ -78,17 +78,6 @@ The right <subject>'s identity, <2–4 key features> are entirely defined by @Im
 Render the entire scene and environment in the <style> visual style of @Image1 and @Image2.
 ```
 
-Why it works:
-- **Modality division of labor** — image = identity/look/style, video = motion/camera/
-  composition, audio = voice. Give each job to the right asset.
-- **Hard identity binding** — "*entirely defined by @ImageN*" is the reliable identity
-  lock. Be explicit about which subject is which (left/right).
-- **Anchor style to the reference images** ("…in the style *of @Image1 and @Image2*"),
-  not to a generic adjective — when the refs carry the look, this pulls it straight
-  from them.
-- **Stay lean.** SD2 degrades when over-constrained. Don't reflexively stack
-  anti-twin / anti-stutter / "keep motion consistent" boilerplate — add those only if
-  a specific failure shows up.
 
 **Task-verb rule (avoids the #1 misrouting bug):** for an *edit* or *extend* task,
 refer to the clip as `@Video1` directly — do **not** write "reference @Video1", which
@@ -102,7 +91,9 @@ The reference video is a **control signal, not a picture** — it should carry o
 what you want taken from it (motion/camera/composition), and as little appearance as
 possible.
 
-- **Greybox / visually-simple source beats a finished photoreal render for
+This is all so far still WIP and just from reading the documentation and the tests ive done up till 06/15/2026
+
+-  **Greybox / visually-simple source beats a finished photoreal render for
   swap+restyle.** A finished/busy/photoreal source *leaks* its look into the output
   as a thin "filter-on-top" restyle; a neutral source leaves the output open to your
   prompt + image refs. (Community-corroborated; mechanism mirrors VACE/Wan, where raw
@@ -139,16 +130,3 @@ possible.
 - **Example 1 — Register + single generation:** _(workflow + render placeholder)_
 - **Example 2 — Two-subject swap (greybox source):** _(workflow + render placeholder)_
 - **Example 3 — Multi-job parallel fanout (head/body):** _(workflow + render placeholder)_
-
----
-
-## 8. Troubleshooting quick hits
-
-| Symptom | Likely cause / fix |
-|---|---|
-| Asset registers but gen can't find it | `ProjectName` mismatch between register and gen — keep them the same |
-| Gen rejects the asset | It isn't `Active` yet — wait for the poll, or it failed preprocessing |
-| Source look bleeds into a restyle | Reference video too "finished" — use a greybox/neutral source (§5) |
-| Output has a weird jump/cut | Output duration > reference length — match them |
-| `Fast` + 1080p errors | Fast caps at 720p — use Pro for 1080p |
-| Subject identity drifts | Bind with "entirely defined by @ImageN"; add a frontal + full-body ref image |

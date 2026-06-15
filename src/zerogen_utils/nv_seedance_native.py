@@ -1,4 +1,4 @@
-"""NV Seedance Native Ref Video — direct-to-Volcengine Seedance 2.0 API caller.
+"""Seedance Native Ref Video — direct-to-Volcengine Seedance 2.0 API caller.
 
 Unlike `seedance_ref_fork.py` (which routes through ComfyUI's api.comfy.org
 proxy + Comfy org auth), this node calls the Volcengine Ark endpoint directly
@@ -210,7 +210,7 @@ def _summarize_content(content: list[dict]) -> list[dict]:
 
 
 def _classify_http_error(status_code: int, body_text: str) -> str:
-    """Keyword-match response body before suggesting a cause — same pattern as D-059."""
+    """Keyword-match response body before suggesting a cause — same pattern as elsewhere."""
     hints = []
     body_low = body_text.lower()
     if status_code == 401:
@@ -270,7 +270,7 @@ async def _poll_task(
     interval: float,
     timeout: float,
 ) -> dict:
-    """Poll task status until terminal. Responsive to Comfy Cancel (D-055 pattern)."""
+    """Poll task status until terminal. Responsive to Comfy Cancel."""
     deadline = time.time() + timeout
     chunked_sleep_step = 0.5  # chunk sleeps so cancel fires within 0.5s
 
@@ -280,7 +280,7 @@ async def _poll_task(
         resp = await _get_task(session, api_key, task_id)
         status = resp.get("status")
         if status != last_status:
-            print(f"[NV_SeedanceNative] status: {status}")
+            print(f"[SeedanceNative] status: {status}")
             last_status = status
         if status in ("succeeded", "failed", "expired", "cancelled"):
             return resp
@@ -320,7 +320,7 @@ def _token_usage_summary(resp: dict, model_id: str, has_video: bool) -> dict:
 # Node
 # ---------------------------------------------------------------------------
 
-class NV_SeedanceNativeRefVideo(IO.ComfyNode):
+class Zerogen_SeedanceNativeRefVideo(IO.ComfyNode):
     """Seedance 2.0 via direct-to-Volcengine API (user-supplied ark- key).
 
     Takes pre-hosted asset URLs (HTTPS, base64 data URIs, or asset:// IDs)
@@ -331,9 +331,9 @@ class NV_SeedanceNativeRefVideo(IO.ComfyNode):
     @classmethod
     def define_schema(cls) -> IO.Schema:
         return IO.Schema(
-            node_id="NV_SeedanceNativeRefVideo",
-            display_name="NV Seedance Native Ref Video",
-            category="NV_Utils/api",
+            node_id="Zerogen_SeedanceNativeRefVideo",
+            display_name="Seedance Native Ref Video",
+            category="zerogen",
             description=(
                 "Direct-to-Volcengine Seedance 2.0 ref-to-video caller. Uses your own "
                 "ark- API key (env: VOLCENGINE_ARK_API_KEY / ARK_API_KEY, or .env). "
@@ -352,7 +352,7 @@ class NV_SeedanceNativeRefVideo(IO.ComfyNode):
                 SEEDANCE_UPLOAD_CONFIG.Input(
                     "upload_config",
                     tooltip=(
-                        "Optional — wire the `config` output of NV_SeedancePrep here to use "
+                        "Optional — wire the `config` output of SeedancePrep here to use "
                         "tensor-based refs (IMAGE / VIDEO) uploaded via ComfyUI's asset host. "
                         "When provided, overrides the image_N_url / video_url string slots "
                         "below. Images default to role=reference_image (multimodal mode). "
@@ -559,7 +559,7 @@ class NV_SeedanceNativeRefVideo(IO.ComfyNode):
                 video_url = cfg_video or ""
                 # Audio stays URL-only — seedance_prep doesn't upload audio.
                 print(
-                    f"[NV_SeedanceNative] Using upload_config: {len(cfg_images)} image(s), "
+                    f"[SeedanceNative] Using upload_config: {len(cfg_images)} image(s), "
                     f"video={'yes' if cfg_video else 'no'} (URL slots ignored)"
                 )
 
@@ -614,18 +614,18 @@ class NV_SeedanceNativeRefVideo(IO.ComfyNode):
             payload["callback_url"] = callback_url.strip()
 
         content_summary = _summarize_content(content)
-        print(f"[NV_SeedanceNative] Model: {model_id} | res={resolution} ratio={ratio} dur={duration}s")
-        print(f"[NV_SeedanceNative] Refs: images={n_images} video={'y' if has_video else 'n'} audio={'y' if has_audio else 'n'}")
-        print(f"[NV_SeedanceNative] seed={seed} gen_audio={generate_audio} watermark={watermark} "
+        print(f"[SeedanceNative] Model: {model_id} | res={resolution} ratio={ratio} dur={duration}s")
+        print(f"[SeedanceNative] Refs: images={n_images} video={'y' if has_video else 'n'} audio={'y' if has_audio else 'n'}")
+        print(f"[SeedanceNative] seed={seed} gen_audio={generate_audio} watermark={watermark} "
               f"return_last_frame={return_last_frame} web_search={web_search}")
-        print(f"[NV_SeedanceNative] Tag analysis: "
+        print(f"[SeedanceNative] Tag analysis: "
               f"@Image{tag_analysis['image_tag_indices'] or '[]'} "
               f"@Video{tag_analysis['video_tag_indices'] or '[]'} "
               f"@Audio{tag_analysis['audio_tag_indices'] or '[]'}"
               f"{' (auto-injected)' if tag_injected else ''}")
         for w in tag_analysis["warnings"]:
-            print(f"[NV_SeedanceNative] ⚠ {w}")
-        print(f"[NV_SeedanceNative] Content array ({len(content)} items):")
+            print(f"[SeedanceNative] ⚠ {w}")
+        print(f"[SeedanceNative] Content array ({len(content)} items):")
         for e in content_summary:
             line = f"  [{e['index']}] {e['type']} role={e.get('role', '-')}"
             if "text_head" in e:
@@ -656,7 +656,7 @@ class NV_SeedanceNativeRefVideo(IO.ComfyNode):
             task_id = create_resp.get("id")
             if not task_id:
                 raise RuntimeError(f"Seedance task creation returned no id. Raw: {create_resp}")
-            print(f"[NV_SeedanceNative] Task submitted: {task_id}")
+            print(f"[SeedanceNative] Task submitted: {task_id}")
 
             final_resp = await _poll_task(session, resolved_key, task_id, poll_interval_s, poll_timeout_s)
         finally:
@@ -691,7 +691,7 @@ class NV_SeedanceNativeRefVideo(IO.ComfyNode):
             out_fps = float(components.frame_rate)
             out_frames = int(out_images.shape[0])
         except Exception as e:
-            print(f"[NV_SeedanceNative] Warning: frame decode failed: {e}")
+            print(f"[SeedanceNative] Warning: frame decode failed: {e}")
             out_images = torch.zeros(1, 64, 64, 3)
             out_fps = 0.0
             out_frames = 0
@@ -711,17 +711,17 @@ class NV_SeedanceNativeRefVideo(IO.ComfyNode):
                 arr = np.array(img).astype(np.float32) / 255.0
                 last_frame_tensor = torch.from_numpy(arr).unsqueeze(0)
                 last_frame_fetched = True
-                print(f"[NV_SeedanceNative] last_frame fetched: {arr.shape[1]}x{arr.shape[0]} (HxW inverted) -> tensor {tuple(last_frame_tensor.shape)}")
+                print(f"[SeedanceNative] last_frame fetched: {arr.shape[1]}x{arr.shape[0]} (HxW inverted) -> tensor {tuple(last_frame_tensor.shape)}")
             except Exception as e:
-                print(f"[NV_SeedanceNative] Warning: last_frame fetch failed: {e}")
+                print(f"[SeedanceNative] Warning: last_frame fetch failed: {e}")
         elif return_last_frame and not last_frame_url:
-            print("[NV_SeedanceNative] Note: return_last_frame=True but API did not return last_frame_url")
+            print("[SeedanceNative] Note: return_last_frame=True but API did not return last_frame_url")
 
         t_end = time.time()
 
         token_usage = _token_usage_summary(final_resp, model_id, has_video)
         if token_usage["cost_estimate_usd"] is not None:
-            print(f"[NV_SeedanceNative] Tokens: total={token_usage['total_tokens']} "
+            print(f"[SeedanceNative] Tokens: total={token_usage['total_tokens']} "
                   f"cost≈${token_usage['cost_estimate_usd']}")
 
         metadata = {
@@ -787,9 +787,9 @@ class NV_SeedanceNativeRefVideo(IO.ComfyNode):
 # ---------------------------------------------------------------------------
 
 NODE_CLASS_MAPPINGS = {
-    "NV_SeedanceNativeRefVideo": NV_SeedanceNativeRefVideo,
+    "Zerogen_SeedanceNativeRefVideo": Zerogen_SeedanceNativeRefVideo,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NV_SeedanceNativeRefVideo": "NV Seedance Native Ref Video",
+    "Zerogen_SeedanceNativeRefVideo": "Seedance Native Ref Video",
 }

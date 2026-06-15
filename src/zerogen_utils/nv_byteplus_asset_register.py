@@ -4,7 +4,7 @@ Native sibling of `nv_moyu_asset_register.py` for the BytePlus ModelArk
 trusted-asset library (Seedance 2.0 international plane). COMPLETELY SEPARATE
 node group: zero imports from the Moyu helper/cache stack, own cache file,
 own staging prefix — existing Moyu workflows are untouched by construction
-(operator constraint 2026-06-11).
+(design constraint 2026-06-11).
 
 Why this exists: direct base64/URL real-face refs are INPUT-GATED on the
 native generation endpoint (InputImageSensitiveContentDetected.PrivacyInformation).
@@ -12,7 +12,7 @@ The bypass — runtime-validated end-to-end 2026-06-11 — is registering the re
 into the Virtual Portrait (AIGC) asset library and generating with
 `asset://<id>`. These nodes do that registration console-free.
 
-Upload/download hygiene contract (operator requirements 2026-06-11):
+Upload/download hygiene contract (design requirements 2026-06-11):
 1. Content-hash identity (SHA256) — same content NEVER uploads twice.
 2. Three-tier lookup before any upload: local cache → remote ListAssets by
    deterministic name (`nv-ref-{hash[:24]}`) → fresh upload only if both miss.
@@ -159,10 +159,10 @@ async def _verify_cached_entry(
     except ArkActionError as e:
         if "notfound" in e.code.lower() or "invalidparameter" in e.code.lower():
             return False, f"GetAsset error {e.code}: {e.message}"
-        print(f"[NV_ByteplusAssetRegister] WARN: liveness check inconclusive ({e.code}); trusting cache.")
+        print(f"[ByteplusAssetRegister] WARN: liveness check inconclusive ({e.code}); trusting cache.")
         return True, f"liveness check inconclusive ({e.code}); trusted"
     except Exception as e:
-        print(f"[NV_ByteplusAssetRegister] WARN: liveness check transport error ({e.__class__.__name__}); trusting cache.")
+        print(f"[ByteplusAssetRegister] WARN: liveness check transport error ({e.__class__.__name__}); trusting cache.")
         return True, f"liveness check transport error ({e.__class__.__name__}); trusted"
 
 
@@ -508,7 +508,7 @@ def _common_inputs(default_poll_timeout: float, max_poll_timeout: float) -> list
         IO.String.Input(
             "b2_bucket",
             default="",
-            tooltip="B2 staging bucket. Empty → env B2_BUCKET / default `nv-comfy-moyu`.",
+            tooltip="B2 staging bucket. Empty → env B2_BUCKET / default ``.",
             optional=True,
         ),
         IO.String.Input(
@@ -568,11 +568,11 @@ def _batch_fail(node_tag: str, reason: str, error_on_fail: bool, results: list |
 
 
 # ---------------------------------------------------------------------------
-# NV_ByteplusImageAssetRegister
+# Zerogen_ByteplusImageAssetRegister
 # ---------------------------------------------------------------------------
 
 
-class NV_ByteplusImageAssetRegister(IO.ComfyNode):
+class Zerogen_ByteplusImageAssetRegister(IO.ComfyNode):
     """Register an IMAGE into the BytePlus Virtual Portrait (AIGC) asset library.
 
     Wire a reference image in ONCE per character/outfit. Output `asset_url`
@@ -586,9 +586,9 @@ class NV_ByteplusImageAssetRegister(IO.ComfyNode):
     @classmethod
     def define_schema(cls) -> IO.Schema:
         return IO.Schema(
-            node_id="NV_ByteplusImageAssetRegister",
-            display_name="NV BytePlus Image Asset Register",
-            category="NV_Utils/api",
+            node_id="Zerogen_ByteplusImageAssetRegister",
+            display_name="BytePlus Image Asset Register",
+            category="zerogen",
             description=(
                 "Register an IMAGE into the BytePlus (native) Virtual Portrait "
                 "asset library, console-free. Content-hash dedup: local cache → "
@@ -664,7 +664,7 @@ class NV_ByteplusImageAssetRegister(IO.ComfyNode):
         b2_region: str = "",
     ) -> IO.NodeOutput:
         t_start = time.time()
-        node_tag = "NV_ByteplusImageAssetRegister"
+        node_tag = "Zerogen_ByteplusImageAssetRegister"
 
         # Batch guard: this single-asset node's encoder takes frame 0 only, but
         # the cache key hashes the whole tensor — feeding a [N>1,...] batch would
@@ -673,7 +673,7 @@ class NV_ByteplusImageAssetRegister(IO.ComfyNode):
             return _preflight_fail(
                 node_tag,
                 f"received a batch of {int(image.shape[0])} images; this single-asset node would register only frame 0. "
-                f"Use NV_ByteplusImageBatchRegister for multi-image registration.",
+                f"Use Zerogen_ByteplusImageBatchRegister for multi-image registration.",
                 tag, error_on_fail,
             )
 
@@ -711,11 +711,11 @@ class NV_ByteplusImageAssetRegister(IO.ComfyNode):
 
 
 # ---------------------------------------------------------------------------
-# NV_ByteplusVideoAssetRegister
+# Zerogen_ByteplusVideoAssetRegister
 # ---------------------------------------------------------------------------
 
 
-class NV_ByteplusVideoAssetRegister(IO.ComfyNode):
+class Zerogen_ByteplusVideoAssetRegister(IO.ComfyNode):
     """Register a VIDEO into the BytePlus Virtual Portrait (AIGC) asset library.
 
     Same three-tier hygiene as the image variant. The MP4 encode is HOISTED
@@ -729,9 +729,9 @@ class NV_ByteplusVideoAssetRegister(IO.ComfyNode):
     @classmethod
     def define_schema(cls) -> IO.Schema:
         return IO.Schema(
-            node_id="NV_ByteplusVideoAssetRegister",
-            display_name="NV BytePlus Video Asset Register",
-            category="NV_Utils/api",
+            node_id="Zerogen_ByteplusVideoAssetRegister",
+            display_name="BytePlus Video Asset Register",
+            category="zerogen",
             description=(
                 "Register a VIDEO into the BytePlus (native) asset library, "
                 "console-free. Same content-hash dedup + B2 ephemeral staging as "
@@ -793,7 +793,7 @@ class NV_ByteplusVideoAssetRegister(IO.ComfyNode):
         b2_region: str = "",
     ) -> IO.NodeOutput:
         t_start = time.time()
-        node_tag = "NV_ByteplusVideoAssetRegister"
+        node_tag = "Zerogen_ByteplusVideoAssetRegister"
 
         ok, msg = preflight_video(video)
         if not ok:
@@ -831,7 +831,7 @@ class NV_ByteplusVideoAssetRegister(IO.ComfyNode):
 
 
 # ---------------------------------------------------------------------------
-# NV_ByteplusImageBatchRegister — register an IMAGE BATCH (1-9) as native
+# Zerogen_ByteplusImageBatchRegister — register an IMAGE BATCH (1-9) as native
 # assets in one shot. Handles the single-image case too (batch_size=1).
 #
 # BytePlus best practice: multiple assets of the SAME person go into ONE group
@@ -842,12 +842,12 @@ class NV_ByteplusVideoAssetRegister(IO.ComfyNode):
 # gen node's reference_image list (prompt refers to them as "image 1", "image
 # 2", ... by request-body order).
 #
-# Atomic K==N semantics (duplicate-first from NV_MoyuImageBatchRegister): all
+# Atomic K==N semantics (duplicate-first from MoyuImageBatchRegister): all
 # slots succeed or the batch fails as a unit; never emits K<N URLs.
 # ---------------------------------------------------------------------------
 
 
-class NV_ByteplusImageBatchRegister(IO.ComfyNode):
+class Zerogen_ByteplusImageBatchRegister(IO.ComfyNode):
     """Register an IMAGE BATCH (1-9) into the BytePlus asset library in one shot.
 
     Each slot runs through the same three-tier core as the single node
@@ -864,9 +864,9 @@ class NV_ByteplusImageBatchRegister(IO.ComfyNode):
     @classmethod
     def define_schema(cls) -> IO.Schema:
         return IO.Schema(
-            node_id="NV_ByteplusImageBatchRegister",
-            display_name="NV BytePlus Image Batch Register",
-            category="NV_Utils/api",
+            node_id="Zerogen_ByteplusImageBatchRegister",
+            display_name="BytePlus Image Batch Register",
+            category="zerogen",
             description=(
                 "Register an IMAGE BATCH (1-9) into the BytePlus (native) asset "
                 "library in one shot — all slots into one asset_group (BytePlus "
@@ -973,7 +973,7 @@ class NV_ByteplusImageBatchRegister(IO.ComfyNode):
         b2_region: str = "",
     ) -> IO.NodeOutput:
         t_overall = time.time()
-        node_tag = "NV_ByteplusImageBatchRegister"
+        node_tag = "Zerogen_ByteplusImageBatchRegister"
 
         # --- Phase 1: cheap deterministic preflights upfront (no network) ---
         # All failures route through _batch_fail so error_on_fail is honored
@@ -1105,13 +1105,13 @@ class NV_ByteplusImageBatchRegister(IO.ComfyNode):
 # ---------------------------------------------------------------------------
 
 NODE_CLASS_MAPPINGS = {
-    "NV_ByteplusImageAssetRegister": NV_ByteplusImageAssetRegister,
-    "NV_ByteplusVideoAssetRegister": NV_ByteplusVideoAssetRegister,
-    "NV_ByteplusImageBatchRegister": NV_ByteplusImageBatchRegister,
+    "Zerogen_ByteplusImageAssetRegister": Zerogen_ByteplusImageAssetRegister,
+    "Zerogen_ByteplusVideoAssetRegister": Zerogen_ByteplusVideoAssetRegister,
+    "Zerogen_ByteplusImageBatchRegister": Zerogen_ByteplusImageBatchRegister,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NV_ByteplusImageAssetRegister": "NV BytePlus Image Asset Register",
-    "NV_ByteplusVideoAssetRegister": "NV BytePlus Video Asset Register",
-    "NV_ByteplusImageBatchRegister": "NV BytePlus Image Batch Register",
+    "Zerogen_ByteplusImageAssetRegister": "BytePlus Image Asset Register",
+    "Zerogen_ByteplusVideoAssetRegister": "BytePlus Video Asset Register",
+    "Zerogen_ByteplusImageBatchRegister": "BytePlus Image Batch Register",
 }

@@ -1,4 +1,4 @@
-"""NV Seedance Native Ref Video V2 — config-only, slim caller.
+"""Seedance Native Ref Video V2 — config-only, slim caller.
 
 Differences from V1 (nv_seedance_native.py):
   - Consumes ONLY SEEDANCE_UPLOAD_CONFIG_V2 (no URL slots, no role dropdowns)
@@ -7,7 +7,7 @@ Differences from V1 (nv_seedance_native.py):
   - Same polling, auth, error classification, session hardening as V1
   - Same outputs including decoded last_frame IMAGE tensor
 
-If you need URL-based refs, use the legacy NV_SeedanceNativeRefVideo.
+If you need URL-based refs, use the legacy Zerogen_SeedanceNativeRefVideo.
 """
 
 from __future__ import annotations
@@ -225,10 +225,10 @@ async def _poll_task(session, api_key, task_id, interval, timeout):
                 raise RuntimeError(
                     f"Seedance poll failed {consecutive_failures}× consecutively — "
                     f"likely a real outage. task_id={task_id}. Last error: {type(e).__name__}: {e}. "
-                    f"Re-run with NV_SeedanceFetchTask once connectivity recovers."
+                    f"Re-run with Zerogen_SeedanceFetchTask once connectivity recovers."
                 ) from e
             backoff = min(_POLL_RETRY_BACKOFF_CAP_S, 2.0 * consecutive_failures)
-            print(f"[NV_SeedanceNative_V2] poll #{consecutive_failures} transient error "
+            print(f"[SeedanceNative_V2] poll #{consecutive_failures} transient error "
                   f"({type(e).__name__}: {e}); retrying in {backoff:.1f}s. task_id={task_id}")
             elapsed = 0.0
             while elapsed < backoff:
@@ -243,7 +243,7 @@ async def _poll_task(session, api_key, task_id, interval, timeout):
         consecutive_failures = 0  # reset on any successful GET
         status = resp.get("status")
         if status != last_status:
-            print(f"[NV_SeedanceNative_V2] status: {status}")
+            print(f"[SeedanceNative_V2] status: {status}")
             last_status = status
         if status in ("succeeded", "failed", "expired", "cancelled"):
             return resp
@@ -282,7 +282,7 @@ def _token_usage_summary(resp, model_id, has_video):
 # Node
 # ---------------------------------------------------------------------------
 
-class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
+class Zerogen_SeedanceNativeRefVideo_V2(IO.ComfyNode):
     """Seedance 2.0 native API caller. Config-only input.
 
     Consumes SEEDANCE_UPLOAD_CONFIG_V2 from NV Seedance Prep V2. Role
@@ -293,9 +293,9 @@ class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
     @classmethod
     def define_schema(cls) -> IO.Schema:
         return IO.Schema(
-            node_id="NV_SeedanceNativeRefVideo_V2",
-            display_name="NV Seedance Native Ref Video V2",
-            category="NV_Utils/api",
+            node_id="Zerogen_SeedanceNativeRefVideo_V2",
+            display_name="Seedance Native Ref Video V2",
+            category="zerogen",
             description=(
                 "Seedance 2.0 native API caller (config-only). Pair with NV Seedance Prep V2 "
                 "for tensor-in workflows. Uses your ark- key from env VOLCENGINE_ARK_API_KEY / "
@@ -415,7 +415,7 @@ class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
                     tooltip=(
                         "Max seconds to wait for task completion. Benchmarks: 5s Pro 720p ≈ 5min, "
                         "15s Mode C Pro with 5 refs + ref_video ≈ 75min (measured 2026-04-24). "
-                        "On timeout, task_id is logged — use NV_SeedanceFetchTask later to retrieve "
+                        "On timeout, task_id is logged — use Zerogen_SeedanceFetchTask later to retrieve "
                         "the finished video without re-running the generation."
                     ),
                 ),
@@ -462,8 +462,8 @@ class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
 
         if not isinstance(upload_config, dict) or upload_config.get("schema_version") != 2:
             raise ValueError(
-                "NV Seedance Native Ref Video V2 requires a SEEDANCE_UPLOAD_CONFIG_V2 from "
-                "NV Seedance Prep V2. Did you wire a legacy config?"
+                "Seedance Native Ref Video V2 requires a SEEDANCE_UPLOAD_CONFIG_V2 from "
+                "Seedance Prep V2. Did you wire a legacy config?"
             )
 
         mode = upload_config.get("mode", MODE_TEXT_ONLY)
@@ -496,7 +496,7 @@ class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
                 duration_source = f"auto-fallback to manual ({duration}s) — no ref video duration in config"
             else:
                 duration_source = f"manual ({duration}s)"
-        print(f"[NV_SeedanceNative_V2] Duration: {duration_source}")
+        print(f"[SeedanceNative_V2] Duration: {duration_source}")
 
         api_content = _build_api_content(upload_config, final_prompt, ref_priority=ref_priority)
 
@@ -515,10 +515,10 @@ class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
         if web_search:
             payload["tools"] = [{"type": "web_search"}]
 
-        print(f"[NV_SeedanceNative_V2] Mode: {mode} | Model: {model_id} | res={resolution} "
+        print(f"[SeedanceNative_V2] Mode: {mode} | Model: {model_id} | res={resolution} "
               f"ratio={ratio} dur={api_duration}s")
-        print(f"[NV_SeedanceNative_V2] Refs: images={n_images} video={'y' if has_video else 'n'}")
-        print(f"[NV_SeedanceNative_V2] seed={seed} gen_audio={generate_audio} "
+        print(f"[SeedanceNative_V2] Refs: images={n_images} video={'y' if has_video else 'n'}")
+        print(f"[SeedanceNative_V2] seed={seed} gen_audio={generate_audio} "
               f"return_last_frame={return_last_frame} web_search={web_search}"
               f"{' (tags auto-injected)' if tag_injected else ''}")
 
@@ -534,7 +534,7 @@ class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
             task_id = create_resp.get("id")
             if not task_id:
                 raise RuntimeError(f"Task creation returned no id. Raw: {create_resp}")
-            print(f"[NV_SeedanceNative_V2] Task submitted: {task_id}")
+            print(f"[SeedanceNative_V2] Task submitted: {task_id}")
             final_resp = await _poll_task(session, resolved_key, task_id, poll_interval_s, poll_timeout_s)
         finally:
             await session.close()
@@ -564,7 +564,7 @@ class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
             out_fps = float(components.frame_rate)
             out_frames = int(out_images.shape[0])
         except Exception as e:
-            print(f"[NV_SeedanceNative_V2] Warning: frame decode failed: {e}")
+            print(f"[SeedanceNative_V2] Warning: frame decode failed: {e}")
             out_images = torch.zeros(1, 64, 64, 3)
             out_fps = 0.0
             out_frames = 0
@@ -581,15 +581,15 @@ class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
                 arr = np.array(img).astype(np.float32) / 255.0
                 last_frame_tensor = torch.from_numpy(arr).unsqueeze(0)
                 last_frame_fetched = True
-                print(f"[NV_SeedanceNative_V2] last_frame fetched: {tuple(last_frame_tensor.shape)}")
+                print(f"[SeedanceNative_V2] last_frame fetched: {tuple(last_frame_tensor.shape)}")
             except Exception as e:
-                print(f"[NV_SeedanceNative_V2] Warning: last_frame fetch failed: {e}")
+                print(f"[SeedanceNative_V2] Warning: last_frame fetch failed: {e}")
 
         t_end = time.time()
 
         token_usage = _token_usage_summary(final_resp, model_id, has_video)
         if token_usage["cost_estimate_usd"] is not None:
-            print(f"[NV_SeedanceNative_V2] Tokens: total={token_usage['total_tokens']} "
+            print(f"[SeedanceNative_V2] Tokens: total={token_usage['total_tokens']} "
                   f"cost≈${token_usage['cost_estimate_usd']}")
 
         metadata = {
@@ -656,9 +656,9 @@ class NV_SeedanceNativeRefVideo_V2(IO.ComfyNode):
 # ---------------------------------------------------------------------------
 
 NODE_CLASS_MAPPINGS = {
-    "NV_SeedanceNativeRefVideo_V2": NV_SeedanceNativeRefVideo_V2,
+    "Zerogen_SeedanceNativeRefVideo_V2": Zerogen_SeedanceNativeRefVideo_V2,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NV_SeedanceNativeRefVideo_V2": "NV Seedance Native Ref Video V2",
+    "Zerogen_SeedanceNativeRefVideo_V2": "Seedance Native Ref Video V2",
 }

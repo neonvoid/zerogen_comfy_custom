@@ -5,8 +5,8 @@ Seedance node modules. Helper modules (nv_byteplus_asset_api, nv_byteplus_asset_
 api_keys, nv_seedance_upload_utils, seedance_chunked_loop_ops, seedance_types) are
 NOT registered — they are imported by the node modules above.
 
-Node ids are kept identical to their original NV_Comfy_Utils ids so existing
-workflows keep working after the extraction.
+All node ids are namespaced with a `Zerogen_` prefix to avoid collisions with
+other ComfyUI node packs.
 """
 
 from .nv_seedance_native import (

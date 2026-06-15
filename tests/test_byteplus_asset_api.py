@@ -10,7 +10,7 @@ environment where the chain imports.
 The V4 signing test pins the module against an independent reference
 implementation transplanted verbatim from the scratch probe that was
 runtime-validated against the live BytePlus API on 2026-06-11
-(D:/tmp/byteplus_asset_smoke.py — ListAssetGroups/ListAssets/CreateAsset/
+(an internal smoke probe — ListAssetGroups/ListAssets/CreateAsset/
 GetAsset all returned HTTP 200 with these exact signing semantics).
 """
 
@@ -91,7 +91,7 @@ def _temp_cache():
     """Point the byteplus cache at a throwaway file; yield its Path."""
     with tempfile.TemporaryDirectory() as d:
         path = pathlib.Path(d) / "byteplus_assets.json"
-        with _env(NV_BYTEPLUS_ASSET_CACHE_PATH=str(path)):
+        with _env(BYTEPLUS_ASSET_CACHE_PATH=str(path)):
             yield path
 
 
@@ -321,7 +321,7 @@ def test_resolve_ark_ak_sk_half_pair_raises():
 
 
 # =============================================================================
-# Cache — isolated to a temp file via NV_BYTEPLUS_ASSET_CACHE_PATH
+# Cache — isolated to a temp file via BYTEPLUS_ASSET_CACHE_PATH
 # =============================================================================
 
 

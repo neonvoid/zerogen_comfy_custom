@@ -1,10 +1,10 @@
 """
-Shared API key resolver for NV_Comfy_Utils nodes.
+Shared API key resolver for Comfy_Utils nodes.
 
 Resolves API keys with this precedence:
   1. Explicit value from node input (override)
   2. Environment variable (GEMINI_API_KEY, GOOGLE_API_KEY, OPENROUTER_API_KEY)
-  3. .env file in the NV_Comfy_Utils root directory
+  3. .env file in the Comfy_Utils root directory
 
 Usage:
     from .api_keys import resolve_api_key
@@ -22,14 +22,14 @@ _ENV_LOADED = False
 
 
 def _load_dotenv_once():
-    """Load .env file from NV_Comfy_Utils root, once per process."""
+    """Load .env file from Comfy_Utils root, once per process."""
     global _ENV_LOADED
     if _ENV_LOADED:
         return
     _ENV_LOADED = True
 
-    # NV_Comfy_Utils root is three levels up from this file:
-    #   src/KNF_Utils/api_keys.py -> src/KNF_Utils/ -> src/ -> NV_Comfy_Utils/
+    # Comfy_Utils root is three levels up from this file:
+    #   src/KNF_Utils/api_keys.py -> src/KNF_Utils/ -> src/ -> Comfy_Utils/
     package_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     env_path = os.path.join(package_root, ".env")
 
@@ -53,9 +53,9 @@ def _load_dotenv_once():
                 # Only set if not already in environment (real env vars take priority)
                 if key and key not in os.environ:
                     os.environ[key] = value
-        print(f"[NV_Comfy_Utils] Loaded .env from {env_path}")
+        print(f"[zerogen] Loaded .env from {env_path}")
     except Exception as e:
-        print(f"[NV_Comfy_Utils] Warning: failed to read .env: {e}")
+        print(f"[zerogen] Warning: failed to read .env: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +66,6 @@ _PROVIDER_ENV_VARS = {
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     "openrouter": ("OPENROUTER_API_KEY",),
     "volcengine": ("VOLCENGINE_ARK_API_KEY", "ARK_API_KEY"),
-    "moyu": ("MOYU_API_KEY",),
     # B2 uses TWO credentials (key id + application key) — resolve via
     # resolve_b2_credentials() below, not resolve_api_key(). Listed here
     # for env-var enumeration / diagnostic completeness.
@@ -103,7 +102,7 @@ def resolve_api_key(api_key: str, provider: str = "gemini") -> str:
     for var in env_vars:
         val = os.environ.get(var)
         if val and val.strip():
-            print(f"[NV_Comfy_Utils] API key loaded from {var}")
+            print(f"[zerogen] API key loaded from {var}")
             return val.strip()
 
     # 4. No key found
@@ -111,7 +110,7 @@ def resolve_api_key(api_key: str, provider: str = "gemini") -> str:
     raise RuntimeError(
         f"No API key for {provider}. Either:\n"
         f"  - Set {var_names} environment variable, or\n"
-        f"  - Add it to NV_Comfy_Utils/.env file, or\n"
+        f"  - Add it to Comfy_Utils/.env file, or\n"
         f"  - Paste it into the api_key node input."
     )
 
@@ -129,8 +128,8 @@ def resolve_b2_credentials(
     (key_id, application_key, bucket, region) with the same precedence as
     resolve_api_key: explicit input > environment > .env file.
 
-    Defaults: bucket=nv-comfy-moyu, region=us-east-005. Override via the
-    B2_BUCKET / B2_REGION env vars or by passing values explicitly.
+    Defaults: region=us-east-005 (set your own bucket via B2_BUCKET). Override
+    via the B2_BUCKET / B2_REGION env vars or by passing values explicitly.
 
     Raises RuntimeError if key_id or application_key cannot be resolved.
     """
@@ -148,7 +147,7 @@ def resolve_b2_credentials(
         if not resolved_key:
             resolved_key = (os.environ.get("B2_APPLICATION_KEY") or "").strip()
         if not resolved_bucket:
-            resolved_bucket = (os.environ.get("B2_BUCKET") or "nv-comfy-moyu").strip()
+            resolved_bucket = (os.environ.get("B2_BUCKET") or "").strip()
         if not resolved_region:
             resolved_region = (os.environ.get("B2_REGION") or "us-east-005").strip()
 
@@ -156,7 +155,7 @@ def resolve_b2_credentials(
         raise RuntimeError(
             "No B2 credentials. Either:\n"
             "  - Set B2_KEY_ID and B2_APPLICATION_KEY environment variables, or\n"
-            "  - Add them to NV_Comfy_Utils/.env file, or\n"
+            "  - Add them to Comfy_Utils/.env file, or\n"
             "  - Paste them into the node's b2_key_id / b2_application_key inputs."
         )
 

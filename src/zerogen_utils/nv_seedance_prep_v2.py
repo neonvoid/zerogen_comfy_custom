@@ -1,4 +1,4 @@
-"""NV Seedance Prep V2 — mode-aware tensor-in preprocessor for Seedance 2.0.
+"""Seedance Prep V2 — mode-aware tensor-in preprocessor for Seedance 2.0.
 
 Clean tensor-in interface. Accepts IMAGE / VIDEO inputs via standard ComfyUI
 wiring (no URLs, no batching concerns — upstream nodes handle batch shaping).
@@ -15,7 +15,7 @@ Validation fires at both graph-build time (VALIDATE_INPUTS — catches mode
 conflicts before the user queues) and inside execute() as a safety net.
 
 Outputs a `SEEDANCE_UPLOAD_CONFIG_V2` carrying role-tagged content. Consumed
-by NV_SeedanceNativeRefVideo_V2.
+by Zerogen_SeedanceNativeRefVideo_V2.
 
 Paper note: per arxiv 2604.14148 Table 27, Seedance 2.0 is architecturally
 biased toward dynamic motion at the cost of first-frame fidelity in motion-ref
@@ -63,12 +63,12 @@ def _take_first_frame(image: torch.Tensor, slot_name: str) -> torch.Tensor:
         image = image.unsqueeze(0)
     if image.ndim != 4:
         raise ValueError(
-            f"[NV_SeedancePrep_V2] {slot_name} must be an IMAGE [B,H,W,C] or [H,W,C], "
+            f"[Zerogen_SeedancePrep_V2] {slot_name} must be an IMAGE [B,H,W,C] or [H,W,C], "
             f"got shape {tuple(image.shape)}"
         )
     if image.shape[0] > 1:
         print(
-            f"[NV_SeedancePrep_V2] warning: {slot_name} received batch size {image.shape[0]}, "
+            f"[Zerogen_SeedancePrep_V2] warning: {slot_name} received batch size {image.shape[0]}, "
             f"using frame [0] only. Wire an Image Batch or Image Select upstream if you "
             f"want a different frame."
         )
@@ -162,15 +162,15 @@ def _build_preview(
 # Node
 # ---------------------------------------------------------------------------
 
-class NV_SeedancePrep_V2(IO.ComfyNode):
+class Zerogen_SeedancePrep_V2(IO.ComfyNode):
     """Tensor-in Seedance 2.0 preprocessor. Mode inferred from wired inputs."""
 
     @classmethod
     def define_schema(cls) -> IO.Schema:
         return IO.Schema(
-            node_id="NV_SeedancePrep_V2",
-            display_name="NV Seedance Prep V2",
-            category="NV_Utils/api",
+            node_id="Zerogen_SeedancePrep_V2",
+            display_name="Seedance Prep V2",
+            category="zerogen",
             description=(
                 "Tensor-in Seedance 2.0 preprocessor. Wire inputs to pick a mode:\n"
                 "  • first_frame only → i2v mode (best for strict identity lock)\n"
@@ -283,7 +283,7 @@ class NV_SeedancePrep_V2(IO.ComfyNode):
                 ri = ri.unsqueeze(0)
             if ri.ndim != 4:
                 raise ValueError(
-                    f"[NV_SeedancePrep_V2] reference_images must be IMAGE [B,H,W,C] or [H,W,C], "
+                    f"[Zerogen_SeedancePrep_V2] reference_images must be IMAGE [B,H,W,C] or [H,W,C], "
                     f"got shape {tuple(ri.shape)}"
                 )
 
@@ -299,10 +299,10 @@ class NV_SeedancePrep_V2(IO.ComfyNode):
             has_reference_video=reference_video is not None,
         )
         if not ok:
-            raise ValueError(f"[NV_SeedancePrep_V2] {msg}")
+            raise ValueError(f"[Zerogen_SeedancePrep_V2] {msg}")
 
         mode = infer_mode(has_first, has_last, ref_count > 0)
-        print(f"[NV_SeedancePrep_V2] Mode: {mode} | first={has_first} last={has_last} "
+        print(f"[Zerogen_SeedancePrep_V2] Mode: {mode} | first={has_first} last={has_last} "
               f"refs={ref_count} video={'yes' if reference_video is not None else 'no'}")
 
         # --- collect + validate reference video ---
@@ -400,7 +400,7 @@ class NV_SeedancePrep_V2(IO.ComfyNode):
             indent=2,
         )
 
-        print(f"[NV_SeedancePrep_V2] Ready: mode={mode}, {len(image_items)} image(s), "
+        print(f"[Zerogen_SeedancePrep_V2] Ready: mode={mode}, {len(image_items)} image(s), "
               f"video={'yes' if uploaded_video_url else 'no'}")
 
         return IO.NodeOutput(config, preview, mode, prompt, info)
@@ -411,9 +411,9 @@ class NV_SeedancePrep_V2(IO.ComfyNode):
 # ---------------------------------------------------------------------------
 
 NODE_CLASS_MAPPINGS = {
-    "NV_SeedancePrep_V2": NV_SeedancePrep_V2,
+    "Zerogen_SeedancePrep_V2": Zerogen_SeedancePrep_V2,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NV_SeedancePrep_V2": "NV Seedance Prep V2",
+    "Zerogen_SeedancePrep_V2": "Seedance Prep V2",
 }

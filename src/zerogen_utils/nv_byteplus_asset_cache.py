@@ -1,7 +1,7 @@
 """Persistent local cache for BytePlus (native) asset library registrations.
 
 Sibling of `nv_moyu_asset_cache.py` with its OWN cache file — the Moyu and
-BytePlus node groups must never share fate (operator constraint 2026-06-11),
+BytePlus node groups must never share fate (design constraint 2026-06-11),
 and the two libraries have disjoint asset-id namespaces anyway.
 
 Same architecture rationale as the Moyu cache: separate asset REGISTRATION
@@ -66,8 +66,8 @@ _SCHEMA_VERSION = 1
 
 
 def get_cache_path() -> Path:
-    """Resolve cache file path. Honors env var NV_BYTEPLUS_ASSET_CACHE_PATH for override."""
-    override = os.environ.get("NV_BYTEPLUS_ASSET_CACHE_PATH")
+    """Resolve cache file path. Honors env var BYTEPLUS_ASSET_CACHE_PATH for override."""
+    override = os.environ.get("BYTEPLUS_ASSET_CACHE_PATH")
     if override:
         return Path(override).expanduser().resolve()
     return _DEFAULT_CACHE_PATH
@@ -100,13 +100,13 @@ def _load_raw() -> dict[str, Any]:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
-        print(f"[NV_ByteplusAssetCache] WARN: failed to read cache {path} ({e}); treating as empty.")
+        print(f"[ByteplusAssetCache] WARN: failed to read cache {path} ({e}); treating as empty.")
         return {"version": _SCHEMA_VERSION, "entries": {}}
     if not isinstance(data, dict) or "entries" not in data:
-        print(f"[NV_ByteplusAssetCache] WARN: cache schema unrecognized at {path}; treating as empty.")
+        print(f"[ByteplusAssetCache] WARN: cache schema unrecognized at {path}; treating as empty.")
         return {"version": _SCHEMA_VERSION, "entries": {}}
     if data.get("version") != _SCHEMA_VERSION:
-        print(f"[NV_ByteplusAssetCache] WARN: cache version {data.get('version')!r} != {_SCHEMA_VERSION}; treating as empty.")
+        print(f"[ByteplusAssetCache] WARN: cache version {data.get('version')!r} != {_SCHEMA_VERSION}; treating as empty.")
         return {"version": _SCHEMA_VERSION, "entries": {}}
     return data
 

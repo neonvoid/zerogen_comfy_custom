@@ -1,17 +1,17 @@
-"""NV BytePlus Seedance Multi-Job — parallel multi-subject single-shot fanout.
+"""BytePlus Seedance Multi-Job — parallel multi-subject single-shot fanout.
 
-The native (BytePlus international) sibling of NV_SeedanceMoyuMultiJob, but
+The native (BytePlus international) sibling of SeedanceMoyuMultiJob, but
 SINGLE-SHOT per job (no chunking): each job is one Seedance gen task (≤15s),
 so this runs N subjects (head/body/…) in parallel from one Run. For outputs
 longer than Seedance's 15s single-call limit you'd want a chunked variant —
-deliberately out of scope here (operator decision 2026-06-12: their ref-gen
+deliberately out of scope here (design decision 2026-06-12: their ref-gen
 clips are short, so chunking is dormant).
 
 Two nodes:
-  - NV_ByteplusSeedanceJobConfig — bundle one subject's prompt + asset:// refs
+  - Zerogen_ByteplusSeedanceJobConfig — bundle one subject's prompt + asset:// refs
     (+ optional per-job overrides incl. smart timing / retime) into a
     BYTEPLUS_SEEDANCE_JOB_CONFIG bus dict.
-  - NV_ByteplusSeedanceMultiJob — take up to 4 job configs, run them concurrently
+  - Zerogen_ByteplusSeedanceMultiJob — take up to 4 job configs, run them concurrently
     (bounded by max_concurrent_jobs), each via the SHARED `_generate_one` core
     that the single gen node uses (zero logic duplication). Soft-fail per job;
     per-slot frames out + aggregated status/task_ids JSON.
@@ -71,7 +71,7 @@ def _is_interrupt(exc: BaseException) -> bool:
 # ---------------------------------------------------------------------------
 
 
-class NV_ByteplusSeedanceJobConfig(IO.ComfyNode):
+class Zerogen_ByteplusSeedanceJobConfig(IO.ComfyNode):
     """Bundle one subject's inputs into a BYTEPLUS_SEEDANCE_JOB_CONFIG.
 
     Wire one per subject (head, body, …): its prompt + pre-registered asset://
@@ -84,18 +84,18 @@ class NV_ByteplusSeedanceJobConfig(IO.ComfyNode):
     @classmethod
     def define_schema(cls) -> IO.Schema:
         return IO.Schema(
-            node_id="NV_ByteplusSeedanceJobConfig",
-            display_name="NV BytePlus Seedance Job Config",
-            category="NV_Utils/api",
+            node_id="Zerogen_ByteplusSeedanceJobConfig",
+            display_name="BytePlus Seedance Job Config",
+            category="zerogen",
             description=(
                 "Bundle one subject's prompt + asset:// refs (+ optional per-job overrides) into a "
-                "BYTEPLUS_SEEDANCE_JOB_CONFIG for NV_ByteplusSeedanceMultiJob."
+                "BYTEPLUS_SEEDANCE_JOB_CONFIG for Zerogen_ByteplusSeedanceMultiJob."
             ),
             inputs=[
                 IO.String.Input("prompt", multiline=True, default="",
-                                tooltip="Final Seedance prompt for THIS subject (e.g. from NV_PromptRefiner)."),
+                                tooltip="Final Seedance prompt for THIS subject (e.g. from PromptRefiner)."),
                 IO.String.Input("ref_image_asset_urls", multiline=True, default="",
-                                tooltip="Newline-separated image asset:// URLs (1-9, @Image order). Wire NV_ByteplusImageBatchRegister.joined_urls.",
+                                tooltip="Newline-separated image asset:// URLs (1-9, @Image order). Wire Zerogen_ByteplusImageBatchRegister.joined_urls.",
                                 optional=True),
                 IO.String.Input("ref_image_asset_url", default="",
                                 tooltip="Single image ref asset:// URL. Mutually exclusive with the multi-line list.",
@@ -170,7 +170,7 @@ class NV_ByteplusSeedanceJobConfig(IO.ComfyNode):
 # ---------------------------------------------------------------------------
 
 
-class NV_ByteplusSeedanceMultiJob(IO.ComfyNode):
+class Zerogen_ByteplusSeedanceMultiJob(IO.ComfyNode):
     """Run up to 4 single-shot BytePlus Seedance gens concurrently from one Run.
 
     Each job = one gen task (≤15s) via the shared `_generate_one` core. Bounded
@@ -182,7 +182,7 @@ class NV_ByteplusSeedanceMultiJob(IO.ComfyNode):
     def define_schema(cls) -> IO.Schema:
         inputs = [
             BYTEPLUS_SEEDANCE_JOB_CONFIG.Input(f"job_{i}", optional=True,
-                                               tooltip=f"Subject job #{i} from NV_ByteplusSeedanceJobConfig. Head→job_1, body→job_2, …")
+                                               tooltip=f"Subject job #{i} from Zerogen_ByteplusSeedanceJobConfig. Head→job_1, body→job_2, …")
             for i in range(1, _MAX_JOB_SLOTS + 1)
         ]
         inputs += [
@@ -221,9 +221,9 @@ class NV_ByteplusSeedanceMultiJob(IO.ComfyNode):
             IO.String.Output(display_name="task_ids_json"),
         ]
         return IO.Schema(
-            node_id="NV_ByteplusSeedanceMultiJob",
-            display_name="NV BytePlus Seedance Multi-Job",
-            category="NV_Utils/api",
+            node_id="Zerogen_ByteplusSeedanceMultiJob",
+            display_name="BytePlus Seedance Multi-Job",
+            category="zerogen",
             description=(
                 "Run up to 4 single-shot BytePlus Seedance gens (≤15s each) in parallel from one Run. "
                 "Bounded concurrency, soft-fail per job, per-slot frames + aggregated status/task_ids JSON. "
@@ -260,7 +260,7 @@ class NV_ByteplusSeedanceMultiJob(IO.ComfyNode):
     ) -> IO.NodeOutput:
         active = [(i, j) for i, j in enumerate([job_1, job_2, job_3, job_4]) if isinstance(j, dict)]
         if not active:
-            msg = "[NV_ByteplusSeedanceMultiJob] No job slots wired — nothing to run."
+            msg = "[Zerogen_ByteplusSeedanceMultiJob] No job slots wired — nothing to run."
             if error_on_noop:
                 raise ValueError(msg + " (set error_on_noop=False to no-op silently.)")
             print(msg)
@@ -280,11 +280,11 @@ class NV_ByteplusSeedanceMultiJob(IO.ComfyNode):
             has_video = bool(video_url)
             n_images = len(image_urls)
             if n_images > _MAX_REF_IMAGES:
-                raise ValueError(f"[NV_ByteplusSeedanceMultiJob] {slot_id}: at most {_MAX_REF_IMAGES} ref images; got {n_images}.")
+                raise ValueError(f"[Zerogen_ByteplusSeedanceMultiJob] {slot_id}: at most {_MAX_REF_IMAGES} ref images; got {n_images}.")
 
             final_prompt = (job.get("prompt") or "").strip()
             if not final_prompt and n_images == 0 and not has_video:
-                raise ValueError(f"[NV_ByteplusSeedanceMultiJob] {slot_id}: empty prompt and no refs.")
+                raise ValueError(f"[Zerogen_ByteplusSeedanceMultiJob] {slot_id}: empty prompt and no refs.")
             final_prompt = _auto_inject_tags(final_prompt, n_images, has_video)
 
             # per-job override or shared default
@@ -297,9 +297,9 @@ class NV_ByteplusSeedanceMultiJob(IO.ComfyNode):
             try:
                 api_duration, dnote = _resolve_duration(j_dmode, j_dur, float(job.get("ref_duration_s") or 0.0))
             except ValueError as ve:
-                raise ValueError(f"[NV_ByteplusSeedanceMultiJob] {slot_id}: {ve}")
+                raise ValueError(f"[Zerogen_ByteplusSeedanceMultiJob] {slot_id}: {ve}")
 
-            print(f"[NV_ByteplusSeedanceMultiJob] {slot_id}: res={j_res} ratio={j_ratio} dur={api_duration}s "
+            print(f"[Zerogen_ByteplusSeedanceMultiJob] {slot_id}: res={j_res} ratio={j_ratio} dur={api_duration}s "
                   f"[{dnote}] slowdown={j_slow} refs(img={n_images} vid={'y' if has_video else 'n'}).")
 
             prepared.append((slot_idx, label, dict(
@@ -327,7 +327,7 @@ class NV_ByteplusSeedanceMultiJob(IO.ComfyNode):
                         raise
                     if not isinstance(exc, Exception):
                         raise
-                    print(f"[NV_ByteplusSeedanceMultiJob] job slot {slot_idx + 1} ({label}) FAILED — {exc.__class__.__name__}: {exc}")
+                    print(f"[Zerogen_ByteplusSeedanceMultiJob] job slot {slot_idx + 1} ({label}) FAILED — {exc.__class__.__name__}: {exc}")
                     return {"slot": slot_idx + 1, "label": label, "status": "failed",
                             "task_id": None, "frames": None, "output_frames": 0, "raw_frames": 0,
                             "retimed": False, "fps": 0.0, "error": f"{exc.__class__.__name__}: {exc}"}
@@ -349,15 +349,15 @@ class NV_ByteplusSeedanceMultiJob(IO.ComfyNode):
         }
         task_ids_obj = {str(o["slot"]): {"label": o["label"], "task_id": o["task_id"]} for o in outcomes}
 
-        print(f"[NV_ByteplusSeedanceMultiJob] DONE — {len(succeeded)}/{len(outcomes)} job(s) succeeded, {len(failed)} failed.")
+        print(f"[Zerogen_ByteplusSeedanceMultiJob] DONE — {len(succeeded)}/{len(outcomes)} job(s) succeeded, {len(failed)} failed.")
 
         if failed:
             fail_summary = "; ".join(f"slot {o['slot']} ({o['label']}): {o['error']}" for o in failed)
             if failure_policy == "error_on_any_failed" or (failure_policy == "error_on_all_failed" and not succeeded):
                 raise RuntimeError(
-                    f"[NV_ByteplusSeedanceMultiJob] {len(failed)}/{len(outcomes)} job(s) failed "
+                    f"[Zerogen_ByteplusSeedanceMultiJob] {len(failed)}/{len(outcomes)} job(s) failed "
                     f"({failure_policy}): {fail_summary}. See status_json + task_ids_json "
-                    f"(succeeded jobs' frames are on their outputs; recover failed via NV_SeedanceFetchTask)."
+                    f"(succeeded jobs' frames are on their outputs; recover failed via Zerogen_SeedanceFetchTask)."
                 )
 
         return IO.NodeOutput(
@@ -372,11 +372,11 @@ class NV_ByteplusSeedanceMultiJob(IO.ComfyNode):
 
 
 NODE_CLASS_MAPPINGS = {
-    "NV_ByteplusSeedanceJobConfig": NV_ByteplusSeedanceJobConfig,
-    "NV_ByteplusSeedanceMultiJob": NV_ByteplusSeedanceMultiJob,
+    "Zerogen_ByteplusSeedanceJobConfig": Zerogen_ByteplusSeedanceJobConfig,
+    "Zerogen_ByteplusSeedanceMultiJob": Zerogen_ByteplusSeedanceMultiJob,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NV_ByteplusSeedanceJobConfig": "NV BytePlus Seedance Job Config",
-    "NV_ByteplusSeedanceMultiJob": "NV BytePlus Seedance Multi-Job",
+    "Zerogen_ByteplusSeedanceJobConfig": "BytePlus Seedance Job Config",
+    "Zerogen_ByteplusSeedanceMultiJob": "BytePlus Seedance Multi-Job",
 }

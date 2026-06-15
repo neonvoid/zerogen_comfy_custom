@@ -1,12 +1,12 @@
-"""NV Seedance Native Chunked Loop V2 — multi-chunk Seedance 2.0 via native ark- key.
+"""Seedance Native Chunked Loop V2 — multi-chunk Seedance 2.0 via native ark- key.
 
-Native counterpart of NV_SeedanceChunkedLoop (D-386, proxy fork). Routes
+Native counterpart of SeedanceChunkedLoop. Routes
 through Volcengine's Ark endpoint directly using the user's ark- key
 (VOLCENGINE_ARK_API_KEY / ARK_API_KEY / .env file), matching the
-NV_SeedanceNativeRefVideo_V2 single-shot path that is the user's
+Zerogen_SeedanceNativeRefVideo_V2 single-shot path that is the user's
 runtime-validated production node (2026-04-23, $1.33/5s Pro 720p).
 
-Mirrors the NV_KlingChunkedLoop architecture exactly:
+Mirrors the KlingChunkedLoop architecture exactly:
 
   1. Slice the long source clip into 4-15s chunks at encode_fps.
   2. For each chunk: encode + upload as Seedance ref video, submit task
@@ -38,12 +38,12 @@ Volcengine API constraints baked into this node:
     client state.
 
   - Per-chunk task IDs are surfaced as a top-level JSON STRING output
-    so the user can recover hung chunks via NV_SeedanceFetchTask if the
+    so the user can recover hung chunks via Zerogen_SeedanceFetchTask if the
     node itself times out or is interrupted.
 
 Reuses helpers from seedance_chunked_loop_ops.py — chunk planning,
 retime restore, parallel-dispatch runner, path/filename validators are
-all model-agnostic (D-386 and this node share the same scaffolding).
+all model-agnostic.
 Only the per-chunk API-call body differs.
 
 Reuses helpers from nv_seedance_native_v2.py (private underscore
@@ -135,7 +135,7 @@ _RATIOS = ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16", "21:9"]
 
 
 # ---------------------------------------------------------------------------
-# Deferred .tmp cleanup (same pattern as D-386, D-385 follow-up)
+# Deferred .tmp cleanup (same pattern as elsewhere, an internal ticket follow-up)
 # ---------------------------------------------------------------------------
 
 def _write_in_flight_recovery_sidecar(
@@ -144,7 +144,7 @@ def _write_in_flight_recovery_sidecar(
     in_flight: dict,
     reason: str,
 ) -> None:
-    """Persist in-flight task IDs to disk for recovery via NV_SeedanceFetchTask.
+    """Persist in-flight task IDs to disk for recovery via Zerogen_SeedanceFetchTask.
 
     Called BEFORE raising InterruptProcessingException (cancel) or
     RuntimeError (chunk failure with siblings in-flight) so the user has
@@ -175,21 +175,21 @@ def _write_in_flight_recovery_sidecar(
                 "note": (
                     "These Volcengine tasks were submitted before the chunked "
                     "loop was interrupted or failed. They continue server-side. "
-                    "Recover each output via NV_SeedanceFetchTask with the "
+                    "Recover each output via Zerogen_SeedanceFetchTask with the "
                     "task_id."
                 ),
             }, indent=2),
             encoding="utf-8",
         )
         print(
-            f"[NV_SeedanceNativeChunkedLoop] Wrote in-flight task_id "
+            f"[SeedanceNativeChunkedLoop] Wrote in-flight task_id "
             f"recovery sidecar ({len(in_flight)} task(s)) → {sidecar}"
         )
     except OSError as e:
         # Sidecar write failure must NOT prevent the interrupt from
         # propagating — just log so the user has the task_ids in console.
         print(
-            f"[NV_SeedanceNativeChunkedLoop] WARN: couldn't write recovery "
+            f"[SeedanceNativeChunkedLoop] WARN: couldn't write recovery "
             f"sidecar ({e.__class__.__name__}: {e}). In-flight task_ids "
             f"(chunk_idx → task_id): {dict(in_flight)}"
         )
@@ -221,7 +221,7 @@ def _deferred_unlink_retry(path: Path, max_attempts: int = 60, delay_sec: float 
 async def _download_url_to_file(url: str, target_path: Path) -> int:
     """Stream URL to {target}.tmp, then os.replace atomically. Returns bytes written.
 
-    Best-effort cleanup: same contract as D-386's helper — .tmp is removed
+    Best-effort cleanup: same contract as elsewhere's helper — .tmp is removed
     on every exit path including Windows file-lock-after-cancel via daemon-
     thread retry (30s window). Orphans persist as harmless .tmp files in
     output_dir if the worker download exceeds 30s after cancellation.
@@ -286,7 +286,7 @@ def _clamp_frames_to_pixel_budget(frames: torch.Tensor) -> tuple[torch.Tensor, b
 
     if pixels < _REF_VIDEO_PIXEL_MIN:
         raise ValueError(
-            f"[NV_SeedanceNativeChunkedLoop] input is {w}x{h} = {pixels:,}px, under "
+            f"[SeedanceNativeChunkedLoop] input is {w}x{h} = {pixels:,}px, under "
             f"Volcengine's {_REF_VIDEO_PIXEL_MIN:,}px minimum (~{int(_REF_VIDEO_PIXEL_MIN ** 0.5)}x"
             f"{int(_REF_VIDEO_PIXEL_MIN ** 0.5)}). Upscale upstream — auto-upscale not "
             f"supported (would add blur)."
@@ -330,14 +330,14 @@ async def _seedance_native_chunk_api_call(
 
     Returns (output_images, chunk_meta, output_fps, token_usage_dict, task_id).
     Raises on errors (including transient outage after 10 consecutive failures
-    — `task_id` will be in the error message for NV_SeedanceFetchTask recovery).
+    — `task_id` will be in the error message for Zerogen_SeedanceFetchTask recovery).
     """
     t_start = time.time()
     num_frames = chunk_images.shape[0]
     h, w = chunk_images.shape[1], chunk_images.shape[2]
 
     print(
-        f"[NV_SeedanceNativeChunkedLoop {chunk_label}] Encoding {num_frames} frames at "
+        f"[SeedanceNativeChunkedLoop {chunk_label}] Encoding {num_frames} frames at "
         f"{encode_fps}fps, {w}x{h}, duration={duration_s}s, model={model_id}, "
         f"res={resolution} ratio={ratio}"
     )
@@ -405,9 +405,9 @@ async def _seedance_native_chunk_api_call(
             dump_request_to.write_text(
                 json.dumps(dump_payload, indent=2, default=str), encoding="utf-8"
             )
-            print(f"[NV_SeedanceNativeChunkedLoop {chunk_label}] dump_request → {dump_request_to}")
+            print(f"[SeedanceNativeChunkedLoop {chunk_label}] dump_request → {dump_request_to}")
         except OSError as _e:
-            print(f"[NV_SeedanceNativeChunkedLoop {chunk_label}] WARNING: dump_request write failed: {_e}")
+            print(f"[SeedanceNativeChunkedLoop {chunk_label}] WARNING: dump_request write failed: {_e}")
 
     t_submit = time.time()
 
@@ -423,7 +423,7 @@ async def _seedance_native_chunk_api_call(
         task_id = create_resp.get("id", "")
         if not task_id:
             raise RuntimeError(
-                f"[NV_SeedanceNativeChunkedLoop {chunk_label}] Task creation "
+                f"[SeedanceNativeChunkedLoop {chunk_label}] Task creation "
                 f"returned no id. Raw: {create_resp}"
             )
         # Surface task_id to the caller BEFORE polling — lets the outer
@@ -436,11 +436,11 @@ async def _seedance_native_chunk_api_call(
                 # Callback failure must NOT prevent the task from polling
                 # to completion; just log and continue.
                 print(
-                    f"[NV_SeedanceNativeChunkedLoop {chunk_label}] WARN: "
+                    f"[SeedanceNativeChunkedLoop {chunk_label}] WARN: "
                     f"on_task_submitted callback raised "
                     f"{cb_e.__class__.__name__}: {cb_e}"
                 )
-        print(f"[NV_SeedanceNativeChunkedLoop {chunk_label}] Task submitted: {task_id}")
+        print(f"[SeedanceNativeChunkedLoop {chunk_label}] Task submitted: {task_id}")
         final_resp = await _poll_task(
             session, api_key, task_id, poll_interval_s, poll_timeout_s
         )
@@ -454,7 +454,7 @@ async def _seedance_native_chunk_api_call(
     if status != "succeeded":
         err = final_resp.get("error") or {}
         raise RuntimeError(
-            f"[NV_SeedanceNativeChunkedLoop {chunk_label}] task ended status="
+            f"[SeedanceNativeChunkedLoop {chunk_label}] task ended status="
             f"{status}. error.code={err.get('code')!r} "
             f"error.message={err.get('message')!r}. task_id={task_id}"
         )
@@ -463,7 +463,7 @@ async def _seedance_native_chunk_api_call(
     result_video_url = resp_content.get("video_url")
     if not result_video_url:
         raise RuntimeError(
-            f"[NV_SeedanceNativeChunkedLoop {chunk_label}] task succeeded but "
+            f"[SeedanceNativeChunkedLoop {chunk_label}] task succeeded but "
             f"content.video_url missing. task_id={task_id}. Raw: {final_resp}"
         )
 
@@ -475,7 +475,7 @@ async def _seedance_native_chunk_api_call(
         output_fps = float(components.frame_rate)
         output_frames = int(output_images.shape[0])
     except Exception as e:
-        print(f"[NV_SeedanceNativeChunkedLoop {chunk_label}] WARN: frame decode failed: {e}")
+        print(f"[SeedanceNativeChunkedLoop {chunk_label}] WARN: frame decode failed: {e}")
         output_images = torch.zeros(1, 64, 64, 3)
         output_fps = 0.0
         output_frames = 0
@@ -514,12 +514,12 @@ async def _seedance_native_chunk_api_call(
 # The node
 # ---------------------------------------------------------------------------
 
-class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
+class Zerogen_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
     """Loop Seedance 2.0 native ref-to-video across N chunks (Mode C only).
 
-    Native counterpart of NV_SeedanceChunkedLoop (proxy). Uses your ark-
+    Native counterpart of SeedanceChunkedLoop (proxy). Uses your ark-
     key from VOLCENGINE_ARK_API_KEY / ARK_API_KEY env var or .env file.
-    For inputs that fit in a single 4-15s call, NV_SeedanceNativeRefVideo_V2
+    For inputs that fit in a single 4-15s call, Zerogen_SeedanceNativeRefVideo_V2
     single-shot stays the right node.
 
     Mode C (multimodal) is the ONLY supported mode — per Volcengine API,
@@ -530,18 +530,18 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
     @classmethod
     def define_schema(cls) -> IO.Schema:
         return IO.Schema(
-            node_id="NV_SeedanceNativeChunkedLoop_V2",
-            display_name="NV Seedance Native Chunked Loop V2",
-            category="NV_Utils/api",
+            node_id="Zerogen_SeedanceNativeChunkedLoop_V2",
+            display_name="Seedance Native Chunked Loop V2",
+            category="zerogen",
             description=(
                 "Loop Seedance 2.0 native ref-to-video across N chunks of a "
                 "long source clip in a single queue run. Mode C (multimodal) "
                 "only — chunked dispatch uploads a per-chunk ref video which "
                 "is only allowed in Mode C. Wire SEEDANCE_UPLOAD_CONFIG_V2 "
-                "from NV_SeedancePrep_V2 with ref images (no ref video). "
+                "from Zerogen_SeedancePrep_V2 with ref images (no ref video). "
                 "Saves raw Seedance output per chunk to disk. Set "
                 "slowdown_factor>1 to restore the joined output back to "
-                "your raw pre-NV_MatchInterpFrames frame count. Set "
+                "your raw pre-MatchInterpFrames frame count. Set "
                 "max_concurrent>1 to fire chunks in parallel — particularly "
                 "impactful since 15s Mode C Pro jobs can be ~75 min wall."
             ),
@@ -552,7 +552,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                     force_input=True,
                     tooltip=(
                         "Final prompt sent to Seedance for EVERY chunk. "
-                        "Typically wired from NV_PromptRefiner (mode="
+                        "Typically wired from PromptRefiner (mode="
                         "seedance_ref). v1 uses the same prompt for all "
                         "chunks. CN + [图1]/[视频1] bracket tags beat EN "
                         "+ @Image1/@Video1 per Seedance training data."
@@ -562,7 +562,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                     "images",
                     tooltip=(
                         "Pre-prepared source frames [B,H,W,C]. For slowdown "
-                        "workflow, run NV_MatchInterpFrames(interpolation_"
+                        "workflow, run MatchInterpFrames(interpolation_"
                         "factor=N) UPSTREAM and pass the slowed tensor here, "
                         "then set slowdown_factor=N below for global restore. "
                         "Each chunk's slice is uploaded as the per-chunk "
@@ -572,7 +572,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                 SEEDANCE_UPLOAD_CONFIG_V2.Input(
                     "upload_config",
                     tooltip=(
-                        "SEEDANCE_UPLOAD_CONFIG_V2 from NV_SeedancePrep_V2. "
+                        "SEEDANCE_UPLOAD_CONFIG_V2 from Zerogen_SeedancePrep_V2. "
                         "Provides the SHARED reference IMAGES (uploaded once, "
                         "reused per chunk). MUST be Mode C (multimodal) — "
                         "wire 1-9 frames to Prep V2's `reference_images` "
@@ -588,7 +588,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                     force_input=True,
                     tooltip=(
                         "Absolute path to directory for per-chunk save. "
-                        "Wire from NV_ShotSaverPath.output_dir."
+                        "Wire from ShotSaverPath.output_dir."
                     ),
                 ),
                 IO.String.Input(
@@ -712,7 +712,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                     max=8,
                     display_mode=IO.NumberDisplay.number,
                     tooltip=(
-                        "If you ran NV_MatchInterpFrames(interpolation_factor=N) "
+                        "If you ran MatchInterpFrames(interpolation_factor=N) "
                         "upstream, set this to N. After concat, the joined "
                         "output is restored to the raw pre-slowdown frame "
                         "count via proportional select. 1 = no slowdown "
@@ -777,7 +777,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                         "local poll timeout. On local timeout, task_id is "
                         "logged in per_chunk_metadata AND the top-level "
                         "task_ids output AND the in-flight recovery "
-                        "sidecar — recover via NV_SeedanceFetchTask."
+                        "sidecar — recover via Zerogen_SeedanceFetchTask."
                     ),
                     optional=True,
                 ),
@@ -819,7 +819,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                         "chunks already polling Volcengine.\n"
                         "  • Per-chunk task_ids are surfaced as a JSON "
                         "STRING output so you can recover any chunk via "
-                        "NV_SeedanceFetchTask if poll times out."
+                        "Zerogen_SeedanceFetchTask if poll times out."
                     ),
                     optional=True,
                 ),
@@ -870,14 +870,14 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
         # ---------- Phase 0: validation BEFORE any API call ----------
         if not isinstance(max_concurrent, int) or max_concurrent < 1 or max_concurrent > 8:
             raise ValueError(
-                f"[NV_SeedanceNativeChunkedLoop] max_concurrent must be int "
+                f"[SeedanceNativeChunkedLoop] max_concurrent must be int "
                 f"in [1, 8], got {max_concurrent!r}"
             )
 
         prefix = _validate_filename_prefix(filename_prefix)
         out_dir = _validate_output_dir(output_dir)
         if not prompt or not prompt.strip():
-            raise ValueError("[NV_SeedanceNativeChunkedLoop] prompt is empty.")
+            raise ValueError("[SeedanceNativeChunkedLoop] prompt is empty.")
 
         cfg = _validate_upload_config_v2(upload_config)
         content_items = cfg["content"]
@@ -888,11 +888,11 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
         # validator already enforces ≥1 image; this is a defensive check.
         if n_images == 0:
             raise RuntimeError(
-                "[NV_SeedanceNativeChunkedLoop] internal: validator passed but "
+                "[SeedanceNativeChunkedLoop] internal: validator passed but "
                 "no image refs found in config content. Should not happen."
             )
 
-        # Resolve ark- API key (matches NV_SeedanceNativeRefVideo_V2 pattern).
+        # Resolve ark- API key (matches Zerogen_SeedanceNativeRefVideo_V2 pattern).
         # resolve_api_key raises RuntimeError if no key found. In debug_mode
         # we skip resolution entirely since no API calls will be made.
         if debug_mode:
@@ -902,13 +902,13 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
 
         total_input_frames = int(images.shape[0])
         if total_input_frames < 1:
-            raise ValueError("[NV_SeedanceNativeChunkedLoop] images is empty.")
+            raise ValueError("[SeedanceNativeChunkedLoop] images is empty.")
 
         # Pixel-budget guard once — H,W constant across chunks
         images, did_resize, (img_h, img_w) = _clamp_frames_to_pixel_budget(images)
         if did_resize:
             print(
-                f"[NV_SeedanceNativeChunkedLoop] Input clamped to {img_w}x{img_h} "
+                f"[SeedanceNativeChunkedLoop] Input clamped to {img_w}x{img_h} "
                 f"to fit Volcengine pixel budget."
             )
 
@@ -928,19 +928,19 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
 
         model_id = _MODELS[model]
         # Auto-inject @Image1..N / @Video1 tags (or Chinese bracket form if
-        # prompt contains CJK) — mirrors NV_SeedanceNativeRefVideo_V2 single-
+        # prompt contains CJK) — mirrors Zerogen_SeedanceNativeRefVideo_V2 single-
         # shot parity. has_video=True because every chunk uploads a per-chunk
         # ref video. n_images = shared ref images from the config.
         final_prompt = _auto_inject_tags(prompt.strip(), n_images=n_images, has_video=True)
         tag_injected = final_prompt != prompt.strip()
         if tag_injected:
-            print(f"[NV_SeedanceNativeChunkedLoop] @-tags auto-injected into final_prompt")
+            print(f"[SeedanceNativeChunkedLoop] @-tags auto-injected into final_prompt")
 
         # Pre-loop summary
         mode_label = "DEBUG (DRY RUN)" if debug_mode else "LIVE"
         save_pattern = f"{prefix}.mp4" if chunk_count == 1 else f"{prefix}_chunkNN.mp4"
         print(
-            f"[NV_SeedanceNativeChunkedLoop {mode_label}] Planned {chunk_count} "
+            f"[SeedanceNativeChunkedLoop {mode_label}] Planned {chunk_count} "
             f"chunk(s) of input ({total_input_frames} frames @ {fps}fps, "
             f"{total_input_frames/fps:.2f}s total). Model={model_id}, "
             f"res={resolution}, ratio={ratio}. Refs: {n_images} image(s) "
@@ -958,19 +958,19 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                 if dump_request else ""
             )
             print(
-                "[NV_SeedanceNativeChunkedLoop DEBUG] No API calls, no uploads, "
+                "[SeedanceNativeChunkedLoop DEBUG] No API calls, no uploads, "
                 "no per-chunk MP4 saves, no charges. Chunk frames passed "
                 "through as mock Seedance output for chunking + retime math "
                 f"verification.{dump_note}"
             )
         if slowdown_factor > 1:
             print(
-                f"[NV_SeedanceNativeChunkedLoop] slowdown_factor={slowdown_factor} → "
+                f"[SeedanceNativeChunkedLoop] slowdown_factor={slowdown_factor} → "
                 f"will restore joined output to {restore_target} frames after concat."
             )
         if max_concurrent > 1:
             print(
-                f"[NV_SeedanceNativeChunkedLoop] PARALLEL dispatch will fire "
+                f"[SeedanceNativeChunkedLoop] PARALLEL dispatch will fire "
                 f"up to {max_concurrent} chunks concurrently. Per-chunk poll "
                 f"timeout {poll_timeout_s:.0f}s. In-flight chunks are "
                 f"non-cancellable once submitted (Volcengine has no remote "
@@ -1052,9 +1052,9 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                         dump_path.write_text(
                             json.dumps(dump_payload, indent=2, default=str), encoding="utf-8"
                         )
-                        print(f"[NV_SeedanceNativeChunkedLoop {chunk_label}] dump_request (debug) → {dump_path}")
+                        print(f"[SeedanceNativeChunkedLoop {chunk_label}] dump_request (debug) → {dump_path}")
                     except OSError as _e:
-                        print(f"[NV_SeedanceNativeChunkedLoop {chunk_label}] dump_request write failed: {_e}")
+                        print(f"[SeedanceNativeChunkedLoop {chunk_label}] dump_request write failed: {_e}")
                 output_images = chunk_raw
                 output_fps_val = float(fps)
                 task_id = "DEBUG_NO_API"
@@ -1116,7 +1116,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                 # (below) could still fail (disk full, permission, etc.),
                 # in which case we want this chunk's task_id to appear
                 # in the recovery sidecar so the user can re-download
-                # via NV_SeedanceFetchTask. Pop only AFTER local save
+                # via Zerogen_SeedanceFetchTask. Pop only AFTER local save
                 # completes (or in debug, before save block since debug
                 # never enters in_flight in the first place).
 
@@ -1129,7 +1129,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                 entry["debug_mode"] = True
                 entry["status"] = "ok"
                 print(
-                    f"[NV_SeedanceNativeChunkedLoop {chunk_label} DEBUG] mock OK — "
+                    f"[SeedanceNativeChunkedLoop {chunk_label} DEBUG] mock OK — "
                     f"{int(output_images.shape[0])} mock frames passed through, "
                     f"NO file written"
                 )
@@ -1148,7 +1148,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                 # sidecar.
                 in_flight_task_ids.pop(chunk_idx, None)
                 print(
-                    f"[NV_SeedanceNativeChunkedLoop {chunk_label}] OK — "
+                    f"[SeedanceNativeChunkedLoop {chunk_label}] OK — "
                     f"{int(output_images.shape[0])} frames @ {output_fps_val:.2f}fps, "
                     f"saved {bytes_written/1024/1024:.2f} MB to {target.name} "
                     f"(task_id={task_id}, cost≈${cost_usd:.4f})"
@@ -1158,7 +1158,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
 
         # Dispatch — sequential vs parallel.
         # InterruptProcessingException is re-raised up to ComfyUI's cancel
-        # handler in both paths (R1-R4 hardening from D-385 follow-up).
+        # handler in both paths (R1-R4 hardening from an internal ticket follow-up).
         if max_concurrent == 1:
             for chunk_idx_zero, ((start_frame, end_frame), duration_s) in enumerate(
                 zip(chunk_ranges, chunk_durations)
@@ -1176,11 +1176,11 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                     chunk_output_fps_observed.append(entry["api"]["output_fps"])
                 except _InterruptProcessingException:
                     print(
-                        f"[NV_SeedanceNativeChunkedLoop {chunk_label}] "
+                        f"[SeedanceNativeChunkedLoop {chunk_label}] "
                         f"INTERRUPTED by ComfyUI Cancel — re-raising up to "
                         f"executor ({len(per_chunk_metadata)} chunks recorded "
                         f"so far). Any in-flight Volcengine task continues "
-                        f"server-side; recover via NV_SeedanceFetchTask."
+                        f"server-side; recover via Zerogen_SeedanceFetchTask."
                     )
                     _write_in_flight_recovery_sidecar(
                         out_dir, prefix, in_flight_task_ids,
@@ -1206,7 +1206,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                         "error_message": str(e),
                     }
                     print(
-                        f"[NV_SeedanceNativeChunkedLoop {chunk_label}] FAILED — "
+                        f"[SeedanceNativeChunkedLoop {chunk_label}] FAILED — "
                         f"{e.__class__.__name__}: {e}"
                     )
                     break
@@ -1217,18 +1217,18 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
             ]
             results = await _run_chunks_concurrent(chunk_factories, max_concurrent)
 
-            # FIRST PASS: scan for InterruptProcessingException — see D-386
+            # FIRST PASS: scan for InterruptProcessingException — see an internal ticket
             # for full rationale (gather captures it as a regular result; we
             # must bubble it up to ComfyUI's Cancel handler).
             for chunk_idx_zero, result in enumerate(results):
                 if isinstance(result, _InterruptProcessingException):
                     print(
-                        f"[NV_SeedanceNativeChunkedLoop] INTERRUPTED by "
+                        f"[SeedanceNativeChunkedLoop] INTERRUPTED by "
                         f"ComfyUI Cancel (chunk "
                         f"{chunk_idx_zero + 1:02d}/{chunk_count:02d} raised "
                         f"first) — re-raising. In-flight Volcengine tasks "
                         f"continue server-side; recover via "
-                        f"NV_SeedanceFetchTask once interrupt settles."
+                        f"Zerogen_SeedanceFetchTask once interrupt settles."
                     )
                     _write_in_flight_recovery_sidecar(
                         out_dir, prefix, in_flight_task_ids,
@@ -1261,7 +1261,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                             "error_message": str(result),
                         }
                     print(
-                        f"[NV_SeedanceNativeChunkedLoop {chunk_label}] FAILED — "
+                        f"[SeedanceNativeChunkedLoop {chunk_label}] FAILED — "
                         f"{result.__class__.__name__}: {result}"
                     )
                 else:
@@ -1287,7 +1287,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
                 f"(proportional select on frame count), so the final frame "
                 f"count is still correct."
             )
-            print(f"[NV_SeedanceNativeChunkedLoop] WARN: {fps_warning}")
+            print(f"[SeedanceNativeChunkedLoop] WARN: {fps_warning}")
 
         task_ids_json = json.dumps(per_chunk_task_ids)
 
@@ -1334,19 +1334,19 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
             )
             # If any sibling chunks were still in-flight when the failure
             # was aggregated, write the recovery sidecar so the user can
-            # recover those tasks via NV_SeedanceFetchTask.
+            # recover those tasks via Zerogen_SeedanceFetchTask.
             _write_in_flight_recovery_sidecar(
                 out_dir, prefix, in_flight_task_ids,
                 reason="chunk(s) failed with sibling task(s) still in-flight",
             )
             raise RuntimeError(
-                f"[NV_SeedanceNativeChunkedLoop] Failed at "
+                f"[SeedanceNativeChunkedLoop] Failed at "
                 f"{failure_info['failed_chunk_label']}: "
                 f"{failure_info['error_type']}: {failure_info['error_message']}"
                 f"{multi_fail_note}. "
                 f"{len(succeeded)}/{chunk_count} chunks saved to disk: "
                 f"{saved_paths}. completed task_ids: {per_chunk_task_ids}. "
-                f"In-flight task_ids (recoverable via NV_SeedanceFetchTask): "
+                f"In-flight task_ids (recoverable via Zerogen_SeedanceFetchTask): "
                 f"{dict(in_flight_task_ids) if in_flight_task_ids else 'none'}. "
                 f"Inspect per_chunk_metadata for full breakdown."
             )
@@ -1355,14 +1355,14 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
         joined = torch.cat(trimmed_outputs, dim=0) if len(trimmed_outputs) > 1 else trimmed_outputs[0]
         joined_count = int(joined.shape[0])
         print(
-            f"[NV_SeedanceNativeChunkedLoop] Joined {len(trimmed_outputs)} chunks → "
+            f"[SeedanceNativeChunkedLoop] Joined {len(trimmed_outputs)} chunks → "
             f"{joined_count} concatenated frames"
         )
 
         if restore_target is not None:
             restored = _restore_proportional(joined, restore_target)
             print(
-                f"[NV_SeedanceNativeChunkedLoop] Restored {joined_count} → "
+                f"[SeedanceNativeChunkedLoop] Restored {joined_count} → "
                 f"{restored.shape[0]} frames (slowdown_factor={slowdown_factor})"
             )
             joined = restored
@@ -1374,7 +1374,7 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
         done_label = "DONE (DEBUG, no charges)" if debug_mode else "DONE"
         usd_label = "would-bill " if debug_mode else ""
         print(
-            f"[NV_SeedanceNativeChunkedLoop] {done_label} in {elapsed}s — "
+            f"[SeedanceNativeChunkedLoop] {done_label} in {elapsed}s — "
             f"{chunk_count} chunks, {usd_label}${round(total_estimated_usd, 4)} total"
         )
 
@@ -1400,9 +1400,9 @@ class NV_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
 # ---------------------------------------------------------------------------
 
 NODE_CLASS_MAPPINGS = {
-    "NV_SeedanceNativeChunkedLoop_V2": NV_SeedanceNativeChunkedLoop_V2,
+    "Zerogen_SeedanceNativeChunkedLoop_V2": Zerogen_SeedanceNativeChunkedLoop_V2,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NV_SeedanceNativeChunkedLoop_V2": "NV Seedance Native Chunked Loop V2",
+    "Zerogen_SeedanceNativeChunkedLoop_V2": "Seedance Native Chunked Loop V2",
 }

@@ -1,14 +1,13 @@
 """BytePlus ModelArk Assets Action API client — V4 signing + asset helpers.
 
-Runtime-validated 2026-06-11 (see memory `byteplus_asset_api_validated` + scratch
-probe D:/tmp/byteplus_asset_smoke.py): full console-free loop proven —
+Runtime-validated 2026-06-11: full console-free loop proven —
 local file -> B2 presigned URL -> CreateAsset -> GetAsset Active (~10s image)
 -> `asset://<id>` generation succeeded.
 
 This module is the NATIVE (BytePlus international) sibling of
 `nv_seedance_moyu_api_helpers.py`. It is deliberately a SEPARATE module with
 zero imports from the Moyu helper stack — the two node groups must never
-share fate (operator constraint 2026-06-11: existing Moyu workflows must not
+share fate (design constraint 2026-06-11: existing Moyu workflows must not
 change at all).
 
 Two credentials, two planes:
@@ -86,7 +85,7 @@ def deterministic_asset_name(content_hash: str) -> str:
 
 
 def resolve_ark_ak_sk(access_key: str = "", secret_key: str = "") -> tuple[str, str]:
-    """Resolve the ARK AK/SK pair: explicit input > env > NV_Comfy_Utils/.env.
+    """Resolve the ARK AK/SK pair: explicit input > env > Comfy_Utils/.env.
 
     Raises RuntimeError with remediation guidance if either half is missing.
     The IAM user needs ArkFullAccess on the target project (validated:
@@ -104,7 +103,7 @@ def resolve_ark_ak_sk(access_key: str = "", secret_key: str = "") -> tuple[str, 
         raise RuntimeError(
             "No BytePlus AK/SK pair for the asset Action API. Either:\n"
             "  - Set ARK_ACCESS_KEY and ARK_SECRET_KEY environment variables, or\n"
-            "  - Add them to NV_Comfy_Utils/.env, or\n"
+            "  - Add them to Comfy_Utils/.env, or\n"
             "  - Paste them into the ark_access_key / ark_secret_key node inputs.\n"
             "Note: this is the IAM Access Key pair (console > IAM > Access Keys), "
             "NOT the Bearer ARK_API_KEY used by the generation endpoint."
@@ -237,7 +236,7 @@ async def action_call(
             # provably never sent) may fall through for those.
             if _is_mutating_action(action) and not isinstance(e, aiohttp.ClientConnectorError):
                 raise
-            print(f"[NV_ByteplusAssetAPI] {action}: host {host} unreachable ({e.__class__.__name__}); trying fallback host.")
+            print(f"[ByteplusAssetAPI] {action}: host {host} unreachable ({e.__class__.__name__}); trying fallback host.")
             last_exc = e
             continue
     raise last_exc if last_exc else RuntimeError(f"{action}: no hosts attempted")
@@ -265,7 +264,7 @@ async def _list_all_pages(
             yield item
         if len(items) < page_size:
             return
-    print(f"[NV_ByteplusAssetAPI] WARN: {action} pagination stopped at {max_pages} pages; exact match may be missed.")
+    print(f"[ByteplusAssetAPI] WARN: {action} pagination stopped at {max_pages} pages; exact match may be missed.")
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +316,7 @@ async def ensure_asset_group(
     if found is not None:
         return found
 
-    print(f"[NV_ByteplusAssetAPI] Asset group {ref!r} not found; creating (GroupType={GROUP_TYPE_AIGC}, project={project_name}).")
+    print(f"[ByteplusAssetAPI] Asset group {ref!r} not found; creating (GroupType={GROUP_TYPE_AIGC}, project={project_name}).")
     try:
         created = await action_call(
             session, "CreateAssetGroup",
@@ -329,7 +328,7 @@ async def ensure_asset_group(
         # an eventually-consistent list: re-list once and adopt before failing.
         retry = await _find_exact()
         if retry is not None:
-            print(f"[NV_ByteplusAssetAPI] CreateAssetGroup({ref!r}) failed ({e.code}) but the group now exists; adopting {retry}.")
+            print(f"[ByteplusAssetAPI] CreateAssetGroup({ref!r}) failed ({e.code}) but the group now exists; adopting {retry}.")
             return retry
         raise
     group_id = created.get("Id")
@@ -476,7 +475,7 @@ def preflight_image(image) -> tuple[bool, str]:  # noqa: ANN001 — torch tensor
 def preflight_video(video) -> tuple[bool, str]:  # noqa: ANN001 — Input.Video duck-typed
     """Check VIDEO duration/fps/pixel-area against native CreateAsset constraints.
 
-    Collects ALL violations so the operator fixes everything in one pass.
+    Collects ALL violations so the user fixes everything in one pass.
     """
     violations: list[str] = []
     try:
@@ -570,7 +569,7 @@ def stage_bytes_to_b2_sync(
     url = client.generate_presigned_url(
         "get_object", Params={"Bucket": bucket, "Key": object_key}, ExpiresIn=_B2_PRESIGN_EXPIRY_S,
     )
-    print(f"[NV_ByteplusAssetAPI] staged s3://{bucket}/{object_key} ({len(body) // 1024} KB, presigned {_B2_PRESIGN_EXPIRY_S}s)")
+    print(f"[ByteplusAssetAPI] staged s3://{bucket}/{object_key} ({len(body) // 1024} KB, presigned {_B2_PRESIGN_EXPIRY_S}s)")
     return url, object_key
 
 
@@ -590,8 +589,8 @@ def delete_staged_object_sync(
     try:
         client = _b2_client(key_id, application_key, region)
         client.delete_object(Bucket=bucket, Key=object_key)
-        print(f"[NV_ByteplusAssetAPI] cleaned staging object s3://{bucket}/{object_key}")
+        print(f"[ByteplusAssetAPI] cleaned staging object s3://{bucket}/{object_key}")
         return True
     except Exception as e:
-        print(f"[NV_ByteplusAssetAPI] WARN: staging cleanup failed for {object_key}: {e.__class__.__name__}: {e}")
+        print(f"[ByteplusAssetAPI] WARN: staging cleanup failed for {object_key}: {e.__class__.__name__}: {e}")
         return False

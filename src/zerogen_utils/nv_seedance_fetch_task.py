@@ -1,6 +1,6 @@
-"""NV Seedance Fetch Task — retrieve a finished (or still-running) task by ID.
+"""Seedance Fetch Task — retrieve a finished (or still-running) task by ID.
 
-Companion to NV_SeedanceNativeRefVideo_V2. Use when:
+Companion to Zerogen_SeedanceNativeRefVideo_V2. Use when:
   - Native_V2's poll timed out and you want to retrieve the eventually-finished video
   - You submitted a task earlier and want to download it later from a fresh graph
   - You want to check status of a long-running task without re-submitting
@@ -33,15 +33,15 @@ from .api_keys import resolve_api_key
 from .nv_seedance_native_v2 import _poll_task
 
 
-class NV_SeedanceFetchTask(IO.ComfyNode):
+class Zerogen_SeedanceFetchTask(IO.ComfyNode):
     """Retrieve a Seedance task by ID. No cost — just fetches existing result."""
 
     @classmethod
     def define_schema(cls):
         return IO.Schema(
-            node_id="NV_SeedanceFetchTask",
-            display_name="NV Seedance Fetch Task",
-            category="NV_Utils/api",
+            node_id="Zerogen_SeedanceFetchTask",
+            display_name="Seedance Fetch Task",
+            category="zerogen",
             description=(
                 "Fetch a Seedance task by task_id. Use to retrieve videos whose generation "
                 "outlived Native_V2's poll_timeout, or to re-download within the 24h signed-URL "
@@ -112,12 +112,12 @@ class NV_SeedanceFetchTask(IO.ComfyNode):
         task_id = (task_id or "").strip()
         if not task_id:
             raise ValueError(
-                "[NV_SeedanceFetchTask] task_id is empty. Paste the ID from "
+                "[Zerogen_SeedanceFetchTask] task_id is empty. Paste the ID from "
                 "Native_V2's log (line starts with 'Task submitted: cgt-...')."
             )
 
         resolved_key = resolve_api_key(api_key, provider="volcengine")
-        print(f"[NV_SeedanceFetchTask] Fetching task {task_id} (interval={poll_interval_s}s, "
+        print(f"[Zerogen_SeedanceFetchTask] Fetching task {task_id} (interval={poll_interval_s}s, "
               f"timeout={poll_timeout_s}s)")
 
         t_start = time.time()
@@ -136,7 +136,7 @@ class NV_SeedanceFetchTask(IO.ComfyNode):
         if status != "succeeded":
             err = final_resp.get("error") or {}
             raise RuntimeError(
-                f"[NV_SeedanceFetchTask] task ended status={status}. "
+                f"[Zerogen_SeedanceFetchTask] task ended status={status}. "
                 f"error.code={err.get('code')!r} error.message={err.get('message')!r}. "
                 f"task_id={task_id}"
             )
@@ -146,7 +146,7 @@ class NV_SeedanceFetchTask(IO.ComfyNode):
         last_frame_url = resp_content.get("last_frame_url")
         if not video_url:
             raise RuntimeError(
-                f"[NV_SeedanceFetchTask] task succeeded but content.video_url missing. "
+                f"[Zerogen_SeedanceFetchTask] task succeeded but content.video_url missing. "
                 f"Raw: {final_resp}"
             )
 
@@ -157,7 +157,7 @@ class NV_SeedanceFetchTask(IO.ComfyNode):
             out_fps = float(components.frame_rate)
             out_frames = int(out_images.shape[0])
         except Exception as e:
-            print(f"[NV_SeedanceFetchTask] Warning: frame decode failed: {e}")
+            print(f"[Zerogen_SeedanceFetchTask] Warning: frame decode failed: {e}")
             out_images = torch.zeros(1, 64, 64, 3)
             out_fps = 0.0
             out_frames = 0
@@ -175,10 +175,10 @@ class NV_SeedanceFetchTask(IO.ComfyNode):
                 arr = np.array(img).astype(np.float32) / 255.0
                 last_frame_tensor = torch.from_numpy(arr).unsqueeze(0)
                 last_frame_fetched = True
-                print(f"[NV_SeedanceFetchTask] last_frame fetched: "
+                print(f"[Zerogen_SeedanceFetchTask] last_frame fetched: "
                       f"{tuple(last_frame_tensor.shape)}")
             except Exception as e:
-                print(f"[NV_SeedanceFetchTask] Warning: last_frame fetch failed: {e}")
+                print(f"[Zerogen_SeedanceFetchTask] Warning: last_frame fetch failed: {e}")
 
         elapsed = time.time() - t_start
         info = {
@@ -194,7 +194,7 @@ class NV_SeedanceFetchTask(IO.ComfyNode):
             "video_url": video_url,  # keep for manual re-download within 24h
             "last_frame_url": last_frame_url,
         }
-        print(f"[NV_SeedanceFetchTask] OK — {out_frames} frames @ {out_fps}fps, "
+        print(f"[Zerogen_SeedanceFetchTask] OK — {out_frames} frames @ {out_fps}fps, "
               f"fetched in {elapsed:.1f}s")
 
         return IO.NodeOutput(
@@ -204,9 +204,9 @@ class NV_SeedanceFetchTask(IO.ComfyNode):
 
 
 NODE_CLASS_MAPPINGS = {
-    "NV_SeedanceFetchTask": NV_SeedanceFetchTask,
+    "Zerogen_SeedanceFetchTask": Zerogen_SeedanceFetchTask,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NV_SeedanceFetchTask": "NV Seedance Fetch Task",
+    "Zerogen_SeedanceFetchTask": "Seedance Fetch Task",
 }
