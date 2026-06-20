@@ -71,10 +71,57 @@ _RESOLUTIONS = ["480p", "720p", "1080p"]
 _RATIOS = ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16", "21:9"]
 
 _MAX_REF_IMAGES = 9   # Seedance Mode C reference-image cap (matches the batch register)
+_MAX_REF_VIDEOS = 3   # Seedance reference-video cap (multi-video composite refs)
 
 
 class _TransientPollHTTPError(RuntimeError):
-    """A 5xx during status polling — retryable; the server-side job continues."""
+    """A retryable HTTP status during polling (5xx / 408 / 429) — the server-side
+    job keeps running, so a single poll-side blip must not forfeit it.
+
+    `retry_after` is the parsed Retry-After delay in seconds (or None). `rate_limited`
+    flags a 429 so the poll loop can wait it out WITHOUT spending its consecutive-
+    failure budget (rate limits are expected backpressure, not an outage)."""
+
+    def __init__(self, message, *, retry_after=None, rate_limited=False):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.rate_limited = rate_limited
+
+
+def _parse_retry_after(value):
+    """Parse a Retry-After header. Only the delta-seconds form is honored; the
+    HTTP-date form returns None (the loop falls back to its normal backoff).
+    Returns a non-negative float or None."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _emit_poll_progress(cls, status, elapsed_s):
+    """Per-poll heartbeat: a CONSOLE line (the reliable telemetry surface) PLUS live
+    node text in the UI.
+
+    Why a console heartbeat: the status-change prints alone leave the console silent
+    for the entire multi-minute `running` stretch, which reads as a hang. Printing
+    every poll proves liveness and shows elapsed time. The node text mirrors it over
+    the websocket (ComfyUI updates nodes live, like the KSampler bar).
+
+    BytePlus exposes NO server-side progress %, and gen time is a variable server-side
+    queue (~2-9 min by load), so we show honest 'status · elapsed', not a fake bar.
+    The UI half is best-effort: a UI hiccup (or a headless/unit context with no
+    PromptServer) must never break a paid generation — but the console line always fires."""
+    line = f"{status or 'submitting'} | {int(elapsed_s)}s elapsed"
+    print(f"[Zerogen_ByteplusSeedanceGen] poll: {line}")  # console heartbeat (always)
+    try:
+        from server import PromptServer
+        from comfy_api_nodes.util._helpers import get_node_id
+
+        PromptServer.instance.send_progress_text(f"Seedance: {line}", get_node_id(cls))
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -83,21 +130,26 @@ class _TransientPollHTTPError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def _auto_inject_tags(prompt: str, n_images: int, has_video: bool) -> str:
-    """Prefix @Image1..N / @Video1 if the prompt has no ref tags (EN or CN form).
+def _auto_inject_tags(prompt: str, n_images: int, n_videos: int = 0) -> str:
+    """Prefix @Video1..N / @Image1..N if the prompt has no ref tags (EN or CN form).
 
     Injects even when the prompt is EMPTY (img2vid: refs but no text) — otherwise
-    the refs reach the model with no @ImageN mapping at all (R0 review HIGH).
+    the refs reach the model with no @VideoN/@ImageN mapping at all (R0 review HIGH).
     English tag detection is case-insensitive so a user's `@image1` isn't
     treated as "no tag" and duplicated (R0 review).
+
+    `n_videos` is the count of reference videos (Seedance accepts up to 3). A bool
+    is still accepted for back-compat (True → 1 video) since older callers passed
+    `has_video=True/False`.
     """
+    n_videos = int(n_videos)  # tolerate bool (True→1, False→0) from legacy callers
     p = prompt or ""
     has_image_tag = bool(re.search(r"@Image\s?\d+", p, re.IGNORECASE)) or bool(re.search(r"\[图\s?\d+\]", p))
     has_video_tag = bool(re.search(r"@Video\s?\d+", p, re.IGNORECASE)) or bool(re.search(r"\[视频\s?\d+\]", p))
     has_cjk = bool(re.search(r"[一-鿿]", p))
     parts: list[str] = []
-    if has_video and not has_video_tag:
-        parts.append("[视频1]" if has_cjk else "@Video1")
+    if n_videos > 0 and not has_video_tag:
+        parts.extend((f"[视频{i}]" if has_cjk else f"@Video{i}") for i in range(1, n_videos + 1))
     if n_images > 0 and not has_image_tag:
         parts.extend((f"[图{i}]" if has_cjk else f"@Image{i}") for i in range(1, n_images + 1))
     if not parts:
@@ -135,19 +187,20 @@ def _classify_http_error(status_code: int, body_text: str) -> str:
     return " | ".join(hints) if hints else f"HTTP {status_code}"
 
 
-def _parse_ref_urls(multiline: str, singular: str) -> list[str]:
-    """Resolve image refs: multi-line list wins over the singular widget.
+def _parse_ref_urls(multiline: str, singular: str, kind: str = "image") -> list[str]:
+    """Resolve refs: multi-line list wins over the singular widget.
 
     Returns asset:// / HTTPS / data: URI strings in order. Raises if BOTH a
     non-empty multiline list AND a non-empty singular are given (ambiguous —
-    mirrors the Moyu chunked loop's mutual-exclusion guard).
+    mirrors the Moyu chunked loop's mutual-exclusion guard). `kind` ("image" /
+    "video") only tunes the error message.
     """
     multi = [ln.strip() for ln in (multiline or "").splitlines() if ln.strip()]
     sing = (singular or "").strip()
     if multi and sing:
         raise ValueError(
-            "Provide refs via EITHER ref_image_asset_urls (multi-line) OR "
-            "ref_image_asset_url (singular), not both."
+            f"Provide {kind} refs via EITHER ref_{kind}_asset_urls (multi-line) OR "
+            f"ref_{kind}_asset_url (singular), not both."
         )
     if multi:
         return multi
@@ -156,13 +209,14 @@ def _parse_ref_urls(multiline: str, singular: str) -> list[str]:
     return []
 
 
-def _build_content(final_prompt: str, image_urls: list[str], video_url: str) -> list[dict]:
+def _build_content(final_prompt: str, image_urls: list[str], video_urls: list[str]) -> list[dict]:
     content: list[dict] = [{"type": "text", "text": final_prompt}]
     for url in image_urls:
         content.append({"type": "image_url", "image_url": {"url": url}, "role": "reference_image"})
-    v = (video_url or "").strip()
-    if v:
-        content.append({"type": "video_url", "video_url": {"url": v}, "role": "reference_video"})
+    for url in video_urls:
+        v = (url or "").strip()
+        if v:
+            content.append({"type": "video_url", "video_url": {"url": v}, "role": "reference_video"})
     return content
 
 
@@ -186,10 +240,17 @@ async def _get_task(session, api_key, task_id):
         body_text = await resp.text()
         if resp.status != 200:
             hint = _classify_http_error(resp.status, body_text)
-            # 5xx during poll is transient — let the retry loop handle it (R0 review)
-            # rather than forfeit an otherwise-running paid job on a single blip.
-            if 500 <= resp.status < 600:
-                raise _TransientPollHTTPError(f"BytePlus Seedance status {resp.status}: {hint}")
+            # Transient during poll — let the retry loop handle it rather than
+            # forfeit an otherwise-running paid job on a single blip:
+            #   5xx  = upstream hiccup
+            #   429  = poll-side rate limit (honor Retry-After, don't burn the budget)
+            #   408  = request timeout
+            if resp.status in (408, 429) or 500 <= resp.status < 600:
+                raise _TransientPollHTTPError(
+                    f"BytePlus Seedance status {resp.status}: {hint}",
+                    retry_after=_parse_retry_after(resp.headers.get("Retry-After")),
+                    rate_limited=(resp.status == 429),
+                )
             raise RuntimeError(f"BytePlus Seedance status lookup failed: {hint}\nRaw: {body_text}")
         try:
             return json.loads(body_text)
@@ -209,45 +270,85 @@ _TRANSIENT_POLL_ERRORS = (
 _MAX_CONSECUTIVE_POLL_FAILURES = 10
 _POLL_RETRY_BACKOFF_CAP_S = 30.0
 
+# Task lifecycle vocabulary. Anything outside BOTH sets is treated as an UNKNOWN
+# status and surfaced immediately — otherwise a server typo / renamed / new status
+# would silently poll until the deadline (~20+ min) on a job that may be stuck.
+_POLL_NONTERMINAL = ("queued", "running")
+_POLL_TERMINAL = ("succeeded", "failed", "cancelled", "expired")
 
-async def _poll_task(session, api_key, task_id, interval, timeout):
-    deadline = time.time() + timeout
+
+async def _poll_task(cls, session, api_key, task_id, interval, timeout):
+    # MONOTONIC clock for all deadline math — wall-clock (time.time()) can jump on
+    # NTP correction / VM sleep-resume and either abort a valid job early or hang.
+    start = time.monotonic()
+    deadline = start + timeout
+    # Cap how far transient-retry backoff can push the deadline. Previously
+    # `deadline += backoff` was UNBOUNDED and the timeout was only checked after a
+    # *successful* poll — so a sustained poll-stall streak could hang the node
+    # ~20-25min past the user's timeout while ComfyUI showed "in progress".
+    hard_ceiling = start + timeout + min(120.0, timeout)
     last_status = None
     consecutive_failures = 0
     while True:
         _check_interrupt()
+        # Deadline check EVERY iteration (covers the transient-failure path too).
+        if time.monotonic() > deadline:
+            raise RuntimeError(
+                f"BytePlus Seedance task poll timed out after {time.monotonic()-start:.0f}s "
+                f"(last status: {last_status}, consecutive_poll_failures={consecutive_failures}). "
+                f"task_id={task_id}. Re-check status with Zerogen_SeedanceFetchTask."
+            )
         try:
             resp = await _get_task(session, api_key, task_id)
         except _TRANSIENT_POLL_ERRORS as e:
-            consecutive_failures += 1
-            if consecutive_failures >= _MAX_CONSECUTIVE_POLL_FAILURES:
-                raise RuntimeError(
-                    f"BytePlus Seedance poll failed {consecutive_failures}× consecutively — likely a real "
-                    f"outage. task_id={task_id}. Last error: {type(e).__name__}: {e}. "
-                    f"Re-run with Zerogen_SeedanceFetchTask once connectivity recovers."
-                ) from e
-            backoff = min(_POLL_RETRY_BACKOFF_CAP_S, 2.0 * consecutive_failures)
-            print(f"[Zerogen_ByteplusSeedanceGen] poll #{consecutive_failures} transient error "
-                  f"({type(e).__name__}: {e}); retrying in {backoff:.1f}s. task_id={task_id}")
+            rate_limited = getattr(e, "rate_limited", False)
+            retry_after = getattr(e, "retry_after", None)
+            # A 429 is expected server backpressure, not an outage — wait it out but
+            # do NOT spend the consecutive-failure budget (else a rate-limit streak
+            # would abort a perfectly-running paid job). The deadline/hard_ceiling
+            # still bound the total wait, so this can't loop forever.
+            if not rate_limited:
+                consecutive_failures += 1
+                if consecutive_failures >= _MAX_CONSECUTIVE_POLL_FAILURES:
+                    raise RuntimeError(
+                        f"BytePlus Seedance poll failed {consecutive_failures}× consecutively — likely a real "
+                        f"outage. task_id={task_id}. Last error: {type(e).__name__}: {e}. "
+                        f"Re-run with Zerogen_SeedanceFetchTask once connectivity recovers."
+                    ) from e
+            if retry_after is not None:
+                backoff = min(_POLL_RETRY_BACKOFF_CAP_S, retry_after)  # honor Retry-After, but bounded
+            elif rate_limited:
+                backoff = _POLL_RETRY_BACKOFF_CAP_S
+            else:
+                backoff = min(_POLL_RETRY_BACKOFF_CAP_S, 2.0 * consecutive_failures)
+            if rate_limited:
+                print(f"[Zerogen_ByteplusSeedanceGen] poll rate-limited (429); waiting {backoff:.1f}s "
+                      f"(Retry-After={'honored' if retry_after is not None else 'absent'}). task_id={task_id}")
+            else:
+                print(f"[Zerogen_ByteplusSeedanceGen] poll #{consecutive_failures} transient error "
+                      f"({type(e).__name__}: {e}); retrying in {backoff:.1f}s. task_id={task_id}")
             elapsed = 0.0
             while elapsed < backoff:
                 _check_interrupt()
                 step = min(0.5, backoff - elapsed)
                 await asyncio.sleep(step)
                 elapsed += step
-            deadline += backoff  # retry sleeps don't count against job-completion budget
+            deadline = min(deadline + backoff, hard_ceiling)  # retry slack, but CAPPED (no unbounded hang)
             continue
         consecutive_failures = 0
         status = resp.get("status")
-        if status != last_status:
-            print(f"[Zerogen_ByteplusSeedanceGen] status: {status}")
-            last_status = status
-        if status in ("succeeded", "failed", "expired", "cancelled"):
-            return resp
-        if time.time() > deadline:
+        last_status = status  # retained for the timeout message
+        # Per-poll heartbeat: console line (always) + live node text (best-effort).
+        _emit_poll_progress(cls, status, time.monotonic() - start)
+        if status in _POLL_TERMINAL:
+            return resp  # _generate_one classifies succeeded vs failed/cancelled/expired
+        if status not in _POLL_NONTERMINAL:
+            # Unknown status — surface NOW instead of silently polling to the deadline.
             raise RuntimeError(
-                f"BytePlus Seedance task poll timed out after {timeout:.0f}s (last: {status}). task_id={task_id}"
+                f"BytePlus Seedance returned an unrecognized task status={status!r}; expected one of "
+                f"{_POLL_NONTERMINAL + _POLL_TERMINAL}. task_id={task_id}. Raw: {resp}"
             )
+        # queued / running → wait the poll interval and check again.
         elapsed = 0.0
         while elapsed < interval:
             _check_interrupt()
@@ -371,7 +472,7 @@ async def _generate_one(
     cls,
     final_prompt: str,
     image_urls: list,
-    video_url: str,
+    video_urls: list,
     model_id: str,
     resolution: str,
     ratio: str,
@@ -396,7 +497,7 @@ async def _generate_one(
     from comfy_api_nodes.util import download_url_to_video_output
     from comfy_api_nodes.util.download_helpers import download_url_to_bytesio
 
-    content = _build_content(final_prompt, image_urls, video_url)
+    content = _build_content(final_prompt, image_urls, video_urls)
     payload: dict = {
         "model": model_id,
         "content": content,
@@ -420,7 +521,7 @@ async def _generate_one(
         if not task_id:
             raise RuntimeError(f"Task creation returned no id. Raw: {create_resp}")
         print(f"[{log_tag}] Task submitted: {task_id}")
-        final_resp = await _poll_task(session, resolved_key, task_id, poll_interval_s, poll_timeout_s)
+        final_resp = await _poll_task(cls, session, resolved_key, task_id, poll_interval_s, poll_timeout_s)
     finally:
         await session.close()
         await asyncio.sleep(0.1)  # Windows ProactorEventLoop SSL cleanup tick
@@ -555,9 +656,22 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
                     optional=True,
                 ),
                 IO.String.Input(
+                    "ref_video_asset_urls",
+                    default="",
+                    multiline=True,
+                    tooltip=(
+                        "Newline-separated reference VIDEOS (1-3), one per line, in @Video1..N order. "
+                        "Each is an asset:// id (or HTTPS URL / data: URI). Already-hosted HTTPS video "
+                        "URLs work directly — no registration/B2 needed. Use multiple to composite refs "
+                        "(e.g. @Video1 = empty scene/environment, @Video2 = cropped subject). Takes "
+                        "priority over the singular widget."
+                    ),
+                    optional=True,
+                ),
+                IO.String.Input(
                     "ref_video_asset_url",
                     default="",
-                    tooltip="Optional reference VIDEO (asset:// / HTTPS). Role = reference_video.",
+                    tooltip="Single reference VIDEO (asset:// / HTTPS / data:). For the one-video case. Mutually exclusive with the multi-line list above.",
                     optional=True,
                 ),
                 IO.Combo.Input(
@@ -673,6 +787,9 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
                 IO.String.Output(display_name="task_id"),
                 IO.String.Output(display_name="api_metadata"),
             ],
+            # unique_id is required for send_progress_text() to target this node's
+            # widget — without it, get_node_id(cls) raises and progress silently no-ops.
+            hidden=[IO.Hidden.unique_id],
             is_api_node=True,
         )
 
@@ -682,6 +799,7 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
         prompt: str,
         ref_image_asset_urls: str = "",
         ref_image_asset_url: str = "",
+        ref_video_asset_urls: str = "",
         ref_video_asset_url: str = "",
         model: str = "Seedance 2.0 Pro",
         resolution: str = "720p",
@@ -702,19 +820,23 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
         t_start = time.time()
 
         image_urls = _parse_ref_urls(ref_image_asset_urls, ref_image_asset_url)
-        has_video = bool((ref_video_asset_url or "").strip())
+        video_urls = _parse_ref_urls(ref_video_asset_urls, ref_video_asset_url, kind="video")
         n_images = len(image_urls)
+        n_videos = len(video_urls)
+        has_video = n_videos > 0
 
         # Validate inputs BEFORE submit (R0 review) — fail here, not as a late API reject.
         if n_images > _MAX_REF_IMAGES:
             raise ValueError(f"Seedance accepts at most {_MAX_REF_IMAGES} reference images; got {n_images}.")
+        if n_videos > _MAX_REF_VIDEOS:
+            raise ValueError(f"Seedance accepts at most {_MAX_REF_VIDEOS} reference videos; got {n_videos}.")
         # Duration validation is centralized in _resolve_duration (covers all modes).
 
         final_prompt = (prompt or "").strip()
         if not final_prompt and n_images == 0 and not has_video:
             raise ValueError("No prompt and no refs — can't submit an empty task.")
         prompt_before = final_prompt
-        final_prompt = _auto_inject_tags(final_prompt, n_images, has_video)
+        final_prompt = _auto_inject_tags(final_prompt, n_images, n_videos)
         tag_injected = final_prompt != prompt_before
 
         resolved_key = resolve_api_key(api_key, provider="volcengine")
@@ -726,14 +848,14 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
 
         print(f"[Zerogen_ByteplusSeedanceGen] model={model_id} res={resolution} ratio={ratio} "
               f"dur={api_duration}s [{duration_note}] slowdown={slowdown_factor} "
-              f"refs(img={n_images} vid={'y' if has_video else 'n'}) gen_audio={generate_audio}"
+              f"refs(img={n_images} vid={n_videos}) gen_audio={generate_audio}"
               f"{' (tags auto-injected)' if tag_injected else ''}")
 
         result = await _generate_one(
             cls=cls,
             final_prompt=final_prompt,
             image_urls=image_urls,
-            video_url=ref_video_asset_url,
+            video_urls=video_urls,
             model_id=model_id,
             resolution=resolution,
             ratio=ratio,
@@ -771,11 +893,16 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
                 "return_last_frame": return_last_frame,
                 "n_reference_images": n_images,
                 "has_reference_video": has_video,
+                "n_reference_videos": n_videos,
                 "prompt_length": len(final_prompt),
                 "prompt_tags_auto_injected": tag_injected,
                 "ref_image_kinds": [
                     "asset" if u.startswith("asset://") else ("data" if u.startswith("data:") else "url")
                     for u in image_urls
+                ],
+                "ref_video_kinds": [
+                    "asset" if u.startswith("asset://") else ("data" if u.startswith("data:") else "url")
+                    for u in video_urls
                 ],
             },
             "response": {

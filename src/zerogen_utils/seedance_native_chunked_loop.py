@@ -929,9 +929,9 @@ class Zerogen_SeedanceNativeChunkedLoop_V2(IO.ComfyNode):
         model_id = _MODELS[model]
         # Auto-inject @Image1..N / @Video1 tags (or Chinese bracket form if
         # prompt contains CJK) — mirrors Zerogen_SeedanceNativeRefVideo_V2 single-
-        # shot parity. has_video=True because every chunk uploads a per-chunk
+        # shot parity. n_videos=1 because every chunk uploads a per-chunk
         # ref video. n_images = shared ref images from the config.
-        final_prompt = _auto_inject_tags(prompt.strip(), n_images=n_images, has_video=True)
+        final_prompt = _auto_inject_tags(prompt.strip(), n_images=n_images, n_videos=1)
         tag_injected = final_prompt != prompt.strip()
         if tag_injected:
             print(f"[SeedanceNativeChunkedLoop] @-tags auto-injected into final_prompt")

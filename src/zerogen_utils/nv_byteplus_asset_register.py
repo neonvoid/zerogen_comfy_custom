@@ -70,6 +70,7 @@ from .nv_byteplus_asset_api import (
 MODERATION_STRATEGIES = ["Default", "Skip"]
 
 _BATCH_MAX_IMAGES = 9   # Seedance Mode C reference-image cap
+_BATCH_MAX_VIDEOS = 3   # Seedance reference-video cap (matches the gen node)
 
 
 # ---------------------------------------------------------------------------
@@ -1101,6 +1102,259 @@ class Zerogen_ByteplusImageBatchRegister(IO.ComfyNode):
 
 
 # ---------------------------------------------------------------------------
+# Zerogen_ByteplusVideoBatchRegister — register up to 3 VIDEOS as native assets
+# in one shot. The video sibling of Zerogen_ByteplusImageBatchRegister.
+#
+# Videos can't share one socket the way images do (an IMAGE is a [B,H,W,C] tensor;
+# a VIDEO is a single object), so each ref is a discrete optional slot. Same
+# content-hash dedup + B2 ephemeral staging + atomic K==N semantics. joined_urls
+# (newline asset:// in slot order) feeds straight into the gen node's
+# `ref_video_asset_urls` multiline input (@Video1..N order).
+# ---------------------------------------------------------------------------
+
+
+class Zerogen_ByteplusVideoBatchRegister(IO.ComfyNode):
+    """Register up to 3 VIDEOS into the BytePlus asset library in one shot.
+
+    Atomic: all slots succeed or the batch fails as a unit (never emits K<N URLs).
+    Each slot reuses the same reviewed `_register_core` as the single video node
+    (cache → remote-adopt → B2 upload), so cache hits never pay the re-encode.
+    """
+
+    @classmethod
+    def define_schema(cls) -> IO.Schema:
+        return IO.Schema(
+            node_id="Zerogen_ByteplusVideoBatchRegister",
+            display_name="BytePlus Video Batch Register",
+            category="zerogen",
+            description=(
+                "Register 1-3 reference VIDEOS into the BytePlus (native) asset "
+                "library in one shot. Discrete slots (videos can't batch into one "
+                "socket like images). Same content-hash dedup + B2 staging as the "
+                "single node. Atomic: all succeed or the batch fails (never K<N). "
+                "joined_urls is the newline-separated asset:// list in slot order — "
+                "wire into Zerogen_ByteplusSeedanceGen.ref_video_asset_urls. Native "
+                "per-video constraints: 2-15s, fps 24-60, pixel area 409,600-2,086,876, <=50MB."
+            ),
+            inputs=[
+                IO.Video.Input(
+                    "video_1",
+                    tooltip="First reference video (required). Slot order IS @Video1..N order in joined_urls.",
+                ),
+                IO.Video.Input(
+                    "video_2",
+                    tooltip="Second reference video (optional).",
+                    optional=True,
+                ),
+                IO.Video.Input(
+                    "video_3",
+                    tooltip="Third reference video (optional). Seedance accepts up to 3 ref videos.",
+                    optional=True,
+                ),
+                IO.String.Input(
+                    "tag_prefix",
+                    default="",
+                    tooltip=(
+                        "Tag prefix. Per-slot tags auto-generated as "
+                        "'{prefix}_{content_hash[:8]}' — content-stable. Empty → "
+                        "'batch_{content_hash[:8]}'. Overridden by `tags`. Tags do NOT affect dedup."
+                    ),
+                    optional=True,
+                ),
+                IO.String.Input(
+                    "tags",
+                    default="",
+                    multiline=True,
+                    tooltip=(
+                        "Optional explicit per-slot tags, one per line. Count MUST match "
+                        "the number of connected video slots exactly or the node raises "
+                        "before any upload. Empty → auto tags via tag_prefix + content_hash."
+                    ),
+                    optional=True,
+                ),
+                # _common_inputs[0] is the single-asset `tag` widget — drop it;
+                # the batch node uses tag_prefix/tags for per-slot labels.
+                *_common_inputs(default_poll_timeout=360.0, max_poll_timeout=900.0)[1:],
+            ],
+            outputs=[
+                IO.String.Output(display_name="joined_urls"),
+                IO.Int.Output(display_name="count"),
+                IO.String.Output(display_name="per_slot_status_json"),
+            ],
+            is_api_node=True,
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, video_1=None, video_2=None, video_3=None, force_reupload: bool = False, project_name: str = DEFAULT_PROJECT_NAME, ark_access_key: str = "", ark_secret_key: str = "", **kwargs):  # noqa: ANN001, ANN206
+        """V3 IS_CHANGED — stable only when EVERY connected slot is already cached
+        in the requested project scope; any uncached slot → NaN → re-execute
+        (atomic with the all-or-nothing semantics). Mirrors the image-batch sibling."""
+        try:
+            videos = [v for v in (video_1, video_2, video_3) if v is not None]
+            if force_reupload or not videos:
+                return float("nan")
+            ak, _ = resolve_ark_ak_sk(ark_access_key, ark_secret_key)
+            ids = []
+            for v in videos:
+                cached = cache.lookup(ak, cache.hash_video_input(v))
+                if not (
+                    cached is not None
+                    and cached.get("asset_type") == "Video"
+                    and cached.get("project_name", DEFAULT_PROJECT_NAME) == project_name
+                ):
+                    return float("nan")
+                ids.append(cached["asset_id"])
+            return "vbatch:" + ":".join(ids) + f":{project_name}"
+        except Exception:
+            pass
+        return float("nan")
+
+    @classmethod
+    async def execute(
+        cls,
+        video_1: Input.Video,
+        video_2: Input.Video = None,
+        video_3: Input.Video = None,
+        tag_prefix: str = "",
+        tags: str = "",
+        asset_group: str = DEFAULT_ASSET_GROUP_NAME,
+        project_name: str = DEFAULT_PROJECT_NAME,
+        moderation: str = "Default",
+        verify_cached: bool = True,
+        force_reupload: bool = False,
+        cleanup_staging: bool = True,
+        poll_timeout_s: float = 360.0,
+        error_on_fail: bool = True,
+        ark_access_key: str = "",
+        ark_secret_key: str = "",
+        b2_key_id: str = "",
+        b2_application_key: str = "",
+        b2_bucket: str = "",
+        b2_region: str = "",
+    ) -> IO.NodeOutput:
+        t_overall = time.time()
+        node_tag = "Zerogen_ByteplusVideoBatchRegister"
+
+        # --- Phase 1: cheap deterministic preflights upfront (no network) ---
+        videos = [v for v in (video_1, video_2, video_3) if v is not None]
+        n = len(videos)
+        if n < 1:
+            return _batch_fail(node_tag, "no video connected (at least video_1 is required).", error_on_fail)
+        if n > _BATCH_MAX_VIDEOS:
+            return _batch_fail(node_tag, f"Seedance accepts at most {_BATCH_MAX_VIDEOS} reference videos; got {n}.", error_on_fail)
+
+        explicit_tags = [t.strip() for t in (tags or "").splitlines() if t.strip()]
+        if explicit_tags and len(explicit_tags) != n:
+            return _batch_fail(
+                node_tag,
+                f"`tags` has {len(explicit_tags)} non-empty lines but {n} video slot(s) are connected. "
+                f"Provide zero tags (auto-named) or exactly {n}, one per slot in order.",
+                error_on_fail,
+            )
+
+        # Resolve AK early so a missing-cred error fails before any work.
+        try:
+            resolve_ark_ak_sk(ark_access_key, ark_secret_key)
+        except Exception as e:
+            return _batch_fail(node_tag, f"credential resolution failed: {e}", error_on_fail)
+
+        per_slot: list[dict] = []
+        for i, vid in enumerate(videos):
+            content_hash = cache.hash_video_input(vid)
+            if explicit_tags:
+                tag_i = explicit_tags[i]
+            elif tag_prefix:
+                tag_i = f"{tag_prefix}_{content_hash[:8]}"
+            else:
+                tag_i = f"batch_{content_hash[:8]}"
+            per_slot.append({"slot": i, "video": vid, "content_hash": content_hash, "tag": tag_i})
+
+        # Per-slot video preflight — collect ALL failures upfront.
+        slot_checks = [(s, *preflight_video(s["video"])) for s in per_slot]  # (s, ok, msg)
+        preflight_failures = [(s["slot"], msg) for s, ok, msg in slot_checks if not ok]
+        if preflight_failures:
+            results = [
+                {"slot": s["slot"], "content_hash": s["content_hash"], "tag": s["tag"],
+                 "status": "preflight_failed",
+                 "error": next((m for sl, m in preflight_failures if sl == s["slot"]), None)}
+                for s in per_slot
+            ]
+            err = (
+                f"native preflight failed for {len(preflight_failures)} of {n} videos:\n"
+                + "\n".join(f"  - slot {s}: {m}" for s, m in preflight_failures)
+            )
+            return _batch_fail(node_tag, err, error_on_fail, results=results)
+
+        # --- Phase 2: serial per-slot register; stop on first failure ---
+        results: list[dict] = []
+        first_failure_slot: int | None = None
+        first_failure_error: str | None = None
+
+        for s in per_slot:
+            slot_t = time.time()
+            core = await _register_core(
+                node_tag=f"{node_tag}[slot {s['slot']}]",
+                content_hash=s["content_hash"],
+                get_body_bytes=(lambda vid=s["video"]: _video_bytes_for_upload(vid)),
+                file_ext=".mp4",
+                content_type="video/mp4",
+                asset_type="Video",
+                tag=s["tag"],
+                group_ref=asset_group,
+                project_name=project_name,
+                moderation_strategy=moderation,
+                force_reupload=force_reupload,
+                verify_cached=verify_cached,
+                cleanup_staging=cleanup_staging,
+                poll_timeout_s=poll_timeout_s,
+                ark_access_key=ark_access_key,
+                ark_secret_key=ark_secret_key,
+                b2_key_id=b2_key_id,
+                b2_application_key=b2_application_key,
+                b2_bucket=b2_bucket,
+                b2_region=b2_region,
+            )
+            core["slot"] = s["slot"]
+            core["elapsed_seconds"] = round(time.time() - slot_t, 3)
+            results.append(core)
+            if core.get("status") == "failed":
+                first_failure_slot = s["slot"]
+                first_failure_error = core.get("error") or "register returned status=failed"
+                break
+
+        # --- Phase 3: atomic assembly ---
+        if first_failure_slot is not None:
+            attempted = {r["slot"] for r in results}
+            for s in per_slot:
+                if s["slot"] not in attempted:
+                    results.append({
+                        "slot": s["slot"], "content_hash": s["content_hash"], "tag": s["tag"],
+                        "status": "unattempted", "asset_url": "", "asset_id": "",
+                        "error": f"batch stopped after slot {first_failure_slot} failed",
+                    })
+            results.sort(key=lambda r: r["slot"])
+            overall = (
+                f"[{node_tag}] BATCH FAILED at slot {first_failure_slot} of {n}: "
+                f"{first_failure_error}. Atomic semantics: emitting empty joined_urls (count=0)."
+            )
+            print(overall)
+            if error_on_fail:
+                raise RuntimeError(overall)
+            return IO.NodeOutput("", 0, json.dumps(results, indent=2, ensure_ascii=False))
+
+        urls = [r["asset_url"] for r in results]
+        joined = "\n".join(urls)
+        elapsed = round(time.time() - t_overall, 2)
+        print(
+            f"[{node_tag}] BATCH OK — {n} slot(s) in {elapsed}s "
+            f"({sum(1 for r in results if r['status'] == 'cache_hit')} cache_hit, "
+            f"{sum(1 for r in results if r['status'] == 'remote_hit')} remote_hit, "
+            f"{sum(1 for r in results if r['status'] == 'uploaded')} uploaded)."
+        )
+        return IO.NodeOutput(joined, n, json.dumps(results, indent=2, ensure_ascii=False))
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
@@ -1108,10 +1362,12 @@ NODE_CLASS_MAPPINGS = {
     "Zerogen_ByteplusImageAssetRegister": Zerogen_ByteplusImageAssetRegister,
     "Zerogen_ByteplusVideoAssetRegister": Zerogen_ByteplusVideoAssetRegister,
     "Zerogen_ByteplusImageBatchRegister": Zerogen_ByteplusImageBatchRegister,
+    "Zerogen_ByteplusVideoBatchRegister": Zerogen_ByteplusVideoBatchRegister,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "Zerogen_ByteplusImageAssetRegister": "BytePlus Image Asset Register",
     "Zerogen_ByteplusVideoAssetRegister": "BytePlus Video Asset Register",
     "Zerogen_ByteplusImageBatchRegister": "BytePlus Image Batch Register",
+    "Zerogen_ByteplusVideoBatchRegister": "BytePlus Video Batch Register",
 }

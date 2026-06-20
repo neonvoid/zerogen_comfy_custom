@@ -32,6 +32,7 @@ from .api_keys import resolve_api_key
 from .nv_byteplus_seedance_gen import (
     _DURATION_MODES,
     _MAX_REF_IMAGES,
+    _MAX_REF_VIDEOS,
     _MODELS,
     _RATIOS,
     _RESOLUTIONS,
@@ -231,6 +232,9 @@ class Zerogen_ByteplusSeedanceMultiJob(IO.ComfyNode):
             ),
             inputs=inputs,
             outputs=outputs,
+            # Required for the shared poll loop's send_progress_text() to target this
+            # node (concurrent jobs share one widget — last update wins, still useful).
+            hidden=[IO.Hidden.unique_id],
             is_api_node=True,
         )
 
@@ -276,16 +280,19 @@ class Zerogen_ByteplusSeedanceMultiJob(IO.ComfyNode):
             slot_id = f"job_{slot_idx + 1} ({label})"
 
             image_urls = _parse_ref_urls(job.get("ref_image_asset_urls", ""), job.get("ref_image_asset_url", ""))
-            video_url = (job.get("ref_video_asset_url") or "").strip()
-            has_video = bool(video_url)
+            video_urls = _parse_ref_urls(job.get("ref_video_asset_urls", ""), job.get("ref_video_asset_url", ""), kind="video")
+            n_videos = len(video_urls)
+            has_video = n_videos > 0
             n_images = len(image_urls)
             if n_images > _MAX_REF_IMAGES:
                 raise ValueError(f"[Zerogen_ByteplusSeedanceMultiJob] {slot_id}: at most {_MAX_REF_IMAGES} ref images; got {n_images}.")
+            if n_videos > _MAX_REF_VIDEOS:
+                raise ValueError(f"[Zerogen_ByteplusSeedanceMultiJob] {slot_id}: at most {_MAX_REF_VIDEOS} ref videos; got {n_videos}.")
 
             final_prompt = (job.get("prompt") or "").strip()
             if not final_prompt and n_images == 0 and not has_video:
                 raise ValueError(f"[Zerogen_ByteplusSeedanceMultiJob] {slot_id}: empty prompt and no refs.")
-            final_prompt = _auto_inject_tags(final_prompt, n_images, has_video)
+            final_prompt = _auto_inject_tags(final_prompt, n_images, n_videos)
 
             # per-job override or shared default
             j_res = job.get("resolution") or resolution
@@ -300,10 +307,10 @@ class Zerogen_ByteplusSeedanceMultiJob(IO.ComfyNode):
                 raise ValueError(f"[Zerogen_ByteplusSeedanceMultiJob] {slot_id}: {ve}")
 
             print(f"[Zerogen_ByteplusSeedanceMultiJob] {slot_id}: res={j_res} ratio={j_ratio} dur={api_duration}s "
-                  f"[{dnote}] slowdown={j_slow} refs(img={n_images} vid={'y' if has_video else 'n'}).")
+                  f"[{dnote}] slowdown={j_slow} refs(img={n_images} vid={n_videos}).")
 
             prepared.append((slot_idx, label, dict(
-                cls=cls, final_prompt=final_prompt, image_urls=image_urls, video_url=video_url,
+                cls=cls, final_prompt=final_prompt, image_urls=image_urls, video_urls=video_urls,
                 model_id=model_id, resolution=j_res, ratio=j_ratio, api_duration=api_duration,
                 generate_audio=generate_audio, watermark=watermark, seed=seed,
                 return_last_frame=return_last_frame, slowdown_factor=j_slow,
