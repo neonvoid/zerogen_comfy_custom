@@ -83,6 +83,39 @@ Render the entire scene and environment in the <style> visual style of @Image1 a
 refer to the clip as `@Video1` directly — do **not** write "reference @Video1", which
 re-routes it to a different (reference) task.
 
+### 4a. Official vs. our-tests (verified against the source 2026-06-27)
+
+`[OFFICIAL]` = confirmed in the BytePlus Seedance 2.0 Prompt Guide
+(`docs.byteplus.com/en/docs/ModelArk/2222480`). `[OURS]` = our runtime finding,
+**not** in the official docs.
+
+- `[OFFICIAL]` **Keep prompts concise; avoid redundancy + contradictory descriptors.**
+  (Supports the lean-beats-heavy pattern above.)
+- `[OFFICIAL]` **Don't use the full asset limit** — "too many assets make it hard for
+  the model to judge feature priorities → style conflicts, blurry subject ID, deviating
+  results." (= our *over-anchoring* finding, officially.)
+- `[OFFICIAL]` **Refs have four functional roles:** character-anchor (appearance),
+  scene tone (environment/style), camera-movement reference (shot language/rhythm),
+  audio (emotion). Recommended ≤4-5 total: 1-2 char + 1 scene + 1 camera-move video +
+  1 audio. (= our *role-split*, expanded.)
+- `[OFFICIAL]` **Camera moves work via standard terms** (slow push-in, wide shot,
+  lateral tracking…) — and **only ONE camera move per shot** (stacking push+pull+pan
+  causes instability).
+- `[OFFICIAL]` **Camera-movement VIDEO reference** — give a clip whose move you want
+  copied: *"Refer to the camera movement from @Video1 to generate <scene>, keeping the
+  scene consistent."* A doc-blessed second way to get a move (e.g. a pull-out) besides
+  describing it in text.
+- `[OFFICIAL]` "keep unchanged" is **intended for EDIT/DELETE tasks** ("parts not
+  mentioned remain unchanged by default"). `[OURS]` BUT in **swap/transform** tasks,
+  over-emphasizing preservation (esp. CN `保持…不变` reintroduced by translation) causes
+  **full passthrough** — so the trap is *task-dependent*, not universal.
+- `[OURS]` **Multiple reference IMAGES → HARD CUT** between the compositions, not a
+  smooth transition. Not in the official docs (they only cover extension-stitch
+  jump-cuts at clip joins — a different mechanism). For a smooth move, use ONE ref +
+  camera-in-text (or a camera-movement video), not two image targets.
+- `[OURS]` **Greybox source > photoreal** for swap/restyle (photoreal "filter-on-top"
+  leak). Community-corroborated, not official.
+
 ---
 
 ## 5. Reference-video best practices
