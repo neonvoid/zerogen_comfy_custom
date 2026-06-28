@@ -245,10 +245,13 @@ def _validate_keyframe_mode(
 ) -> str:
     """Enforce Seedance's mutually-exclusive image modes (doc 2291680 L53 + 2298881).
 
-    Returns the resolved mode string (for logging / sidecar):
+    Returns the resolved mode string (for logging / sidecar). NOTE: this is a
+    CLIENT-SIDE label only — it is never sent to the API. Seedance has one endpoint
+    with no mode/task param; behaviour is driven by content roles + prompt verbs.
+    The label just records which content shape was built:
       - "bridge"       first_frame + last_frame (smooth interpolation)
       - "first_frame"  first_frame only (image->video)
-      - "reference"    reference_image/_video (multimodal) - keyframe-free
+      - "multimodal"   reference_image/_video roles - keyframe-free
       - "text"         nothing wired
 
     Raises ValueError (pre-spend) on illegal combos:
@@ -272,7 +275,7 @@ def _validate_keyframe_mode(
     if has_first_frame:
         return "first_frame"
     if n_images > 0 or n_videos > 0:
-        return "reference"
+        return "multimodal"
     return "text"
 
 
