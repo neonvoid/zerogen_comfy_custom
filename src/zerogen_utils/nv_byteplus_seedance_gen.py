@@ -209,8 +209,28 @@ def _parse_ref_urls(multiline: str, singular: str, kind: str = "image") -> list[
     return []
 
 
-def _build_content(final_prompt: str, image_urls: list[str], video_urls: list[str]) -> list[dict]:
+def _build_content(
+    final_prompt: str,
+    image_urls: list[str],
+    video_urls: list[str],
+    first_frame_url: str | None = None,
+    last_frame_url: str | None = None,
+) -> list[dict]:
+    """Assemble the Seedance content array.
+
+    Keyframe roles (first_frame / last_frame) and reference roles
+    (reference_image / reference_video) are MUTUALLY EXCLUSIVE per the Volcengine
+    API — callers must validate with `_validate_keyframe_mode` first. The wire
+    shape of a keyframe item is identical to a reference image; only `role`
+    differs (confirmed against the official SDK sample, doc 2298881 L358-391).
+    """
     content: list[dict] = [{"type": "text", "text": final_prompt}]
+    ff = (first_frame_url or "").strip()
+    lf = (last_frame_url or "").strip()
+    if ff:
+        content.append({"type": "image_url", "image_url": {"url": ff}, "role": "first_frame"})
+    if lf:
+        content.append({"type": "image_url", "image_url": {"url": lf}, "role": "last_frame"})
     for url in image_urls:
         content.append({"type": "image_url", "image_url": {"url": url}, "role": "reference_image"})
     for url in video_urls:
@@ -218,6 +238,42 @@ def _build_content(final_prompt: str, image_urls: list[str], video_urls: list[st
         if v:
             content.append({"type": "video_url", "video_url": {"url": v}, "role": "reference_video"})
     return content
+
+
+def _validate_keyframe_mode(
+    *, has_first_frame: bool, has_last_frame: bool, n_images: int, n_videos: int
+) -> str:
+    """Enforce Seedance's mutually-exclusive image modes (doc 2291680 L53 + 2298881).
+
+    Returns the resolved mode string (for logging / sidecar):
+      - "bridge"       first_frame + last_frame (smooth interpolation)
+      - "first_frame"  first_frame only (image->video)
+      - "reference"    reference_image/_video (multimodal) - keyframe-free
+      - "text"         nothing wired
+
+    Raises ValueError (pre-spend) on illegal combos:
+      - last_frame without first_frame
+      - any keyframe role mixed with reference_image / reference_video
+    """
+    if has_last_frame and not has_first_frame:
+        raise ValueError(
+            "Bridge mode requires BOTH first_frame AND last_frame. Either also wire "
+            "first_frame_asset_url, or clear last_frame_asset_url."
+        )
+    if (has_first_frame or has_last_frame) and (n_images > 0 or n_videos > 0):
+        raise ValueError(
+            "first_frame/last_frame modes are MUTUALLY EXCLUSIVE with "
+            "reference_image/reference_video - Seedance's 3 image modes do not mix. "
+            "For an identity anchor alongside a reference video, wire the image to "
+            "reference_image (multimodal mode), not first_frame."
+        )
+    if has_last_frame:   # has_first_frame guaranteed by the check above
+        return "bridge"
+    if has_first_frame:
+        return "first_frame"
+    if n_images > 0 or n_videos > 0:
+        return "reference"
+    return "text"
 
 
 async def _post_task(session, api_key, payload):
@@ -485,6 +541,8 @@ async def _generate_one(
     poll_interval_s: float,
     poll_timeout_s: float,
     resolved_key: str,
+    first_frame_url: str | None = None,
+    last_frame_url: str | None = None,
     log_tag: str = "Zerogen_ByteplusSeedanceGen",
 ) -> dict:
     """Submit one gen task → poll → download → decode → retime-restore.
@@ -497,7 +555,7 @@ async def _generate_one(
     from comfy_api_nodes.util import download_url_to_video_output
     from comfy_api_nodes.util.download_helpers import download_url_to_bytesio
 
-    content = _build_content(final_prompt, image_urls, video_urls)
+    content = _build_content(final_prompt, image_urls, video_urls, first_frame_url, last_frame_url)
     payload: dict = {
         "model": model_id,
         "content": content,
@@ -674,6 +732,26 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
                     tooltip="Single reference VIDEO (asset:// / HTTPS / data:). For the one-video case. Mutually exclusive with the multi-line list above.",
                     optional=True,
                 ),
+                IO.String.Input(
+                    "first_frame_asset_url",
+                    default="",
+                    tooltip=(
+                        "KEYFRAME mode: starting frame (asset:// / HTTPS / data:). Output coheres with "
+                        "this image (image->video). MUTUALLY EXCLUSIVE with reference images/videos. "
+                        "Register a PNG via ByteplusImageAssetRegister and wire its asset:// here."
+                    ),
+                    optional=True,
+                ),
+                IO.String.Input(
+                    "last_frame_asset_url",
+                    default="",
+                    tooltip=(
+                        "KEYFRAME BRIDGE mode: ending frame (asset:// / HTTPS / data:). Requires "
+                        "first_frame_asset_url too; output smoothly connects first->last. Mutually "
+                        "exclusive with reference images/videos."
+                    ),
+                    optional=True,
+                ),
                 IO.Combo.Input(
                     "model",
                     options=list(_MODELS.keys()),
@@ -801,6 +879,8 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
         ref_image_asset_url: str = "",
         ref_video_asset_urls: str = "",
         ref_video_asset_url: str = "",
+        first_frame_asset_url: str = "",
+        last_frame_asset_url: str = "",
         model: str = "Seedance 2.0 Pro",
         resolution: str = "720p",
         ratio: str = "adaptive",
@@ -832,8 +912,18 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
             raise ValueError(f"Seedance accepts at most {_MAX_REF_VIDEOS} reference videos; got {n_videos}.")
         # Duration validation is centralized in _resolve_duration (covers all modes).
 
+        # Keyframe modes (first/last frame) are mutually exclusive with reference refs.
+        first_frame_url = (first_frame_asset_url or "").strip()
+        last_frame_url = (last_frame_asset_url or "").strip()
+        keyframe_mode = _validate_keyframe_mode(
+            has_first_frame=bool(first_frame_url),
+            has_last_frame=bool(last_frame_url),
+            n_images=n_images,
+            n_videos=n_videos,
+        )
+
         final_prompt = (prompt or "").strip()
-        if not final_prompt and n_images == 0 and not has_video:
+        if not final_prompt and n_images == 0 and not has_video and not first_frame_url:
             raise ValueError("No prompt and no refs — can't submit an empty task.")
         prompt_before = final_prompt
         final_prompt = _auto_inject_tags(final_prompt, n_images, n_videos)
@@ -848,7 +938,7 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
 
         print(f"[Zerogen_ByteplusSeedanceGen] model={model_id} res={resolution} ratio={ratio} "
               f"dur={api_duration}s [{duration_note}] slowdown={slowdown_factor} "
-              f"refs(img={n_images} vid={n_videos}) gen_audio={generate_audio}"
+              f"mode={keyframe_mode} refs(img={n_images} vid={n_videos}) gen_audio={generate_audio}"
               f"{' (tags auto-injected)' if tag_injected else ''}")
 
         result = await _generate_one(
@@ -868,6 +958,8 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
             poll_interval_s=poll_interval_s,
             poll_timeout_s=poll_timeout_s,
             resolved_key=resolved_key,
+            first_frame_url=first_frame_url or None,
+            last_frame_url=last_frame_url or None,
         )
 
         final_resp = result["final_resp"]
@@ -891,6 +983,9 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
                 "watermark": watermark,
                 "seed": seed,
                 "return_last_frame": return_last_frame,
+                "mode": keyframe_mode,
+                "has_first_frame": bool(first_frame_url),
+                "has_last_frame": bool(last_frame_url),
                 "n_reference_images": n_images,
                 "has_reference_video": has_video,
                 "n_reference_videos": n_videos,
