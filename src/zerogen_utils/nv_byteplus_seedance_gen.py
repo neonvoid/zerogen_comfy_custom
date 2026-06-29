@@ -279,17 +279,6 @@ def _resolve_image_roles(mode: str, image_urls: list, n_videos: int):
     return [], image_urls[0], image_urls[1]
 
 
-def _assert_keyframe_prompt_clean(mode: str, prompt: str) -> None:
-    """Keyframe modes have no reference_image/_video entries, so an @ImageN/@VideoN
-    tag in the prompt points at nothing. Fail pre-spend rather than bill a confusing
-    result (review finding)."""
-    if mode != "multimodal" and re.search(r"@(?:Image|Video)\d+", prompt or ""):
-        raise ValueError(
-            f"{mode} mode uses first/last-frame roles, not @ImageN/@VideoN references — "
-            f"remove the tag(s) from the prompt or switch mode to multimodal."
-        )
-
-
 async def _post_task(session, api_key, payload):
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
     async with session.post(f"{_API_BASE}{_CREATE_PATH}", json=payload, headers=headers) as resp:
@@ -908,7 +897,6 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
         # Duration validation is centralized in _resolve_duration (covers all modes).
 
         final_prompt = (prompt or "").strip()
-        _assert_keyframe_prompt_clean(mode, final_prompt)
         if not final_prompt and not (image_urls or video_urls or first_frame_url or last_frame_url):
             raise ValueError("No prompt and no refs — can't submit an empty task.")
         prompt_before = final_prompt

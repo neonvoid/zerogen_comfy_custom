@@ -42,7 +42,6 @@ from .nv_byteplus_seedance_gen import (
     _RATIOS,
     _RESOLUTIONS,
     _IMAGE_MODES,
-    _assert_keyframe_prompt_clean,
     _auto_inject_tags,
     _build_content,
     _measure_video_duration,
@@ -216,7 +215,6 @@ class Zerogen_ByteplusSeedanceSubmit(IO.ComfyNode):
             raise ValueError(f"Seedance accepts at most {_MAX_REF_VIDEOS} reference videos; got {n_videos}.")
 
         final_prompt = (prompt or "").strip()
-        _assert_keyframe_prompt_clean(mode, final_prompt)
         if not final_prompt and not (image_urls or video_urls or first_frame_url or last_frame_url):
             raise ValueError("No prompt and no refs — can't submit an empty task.")
         final_prompt = _auto_inject_tags(final_prompt, n_images, n_videos)
