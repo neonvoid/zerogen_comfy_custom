@@ -173,3 +173,66 @@ Discover linked doc IDs: fetch a page and `grep -oE 'ModelArk/[0-9]{6,}'`.
   `seedance_reference_mode_framing`, `sd2_multi_video_refs_no_spatial_composite`.
 - Prompt engine encoding these rules: `NV_Comfy_Utils/src/KNF_Utils/seedance_prompt_policy.py`
   (modes/skeletons/linter) + `NV_SeedanceShotV2` in `prompt_refiner.py`.
+
+---
+
+## Principles & best practices (consolidated 2026-06-29)
+
+### Mental model
+- **ONE generative endpoint that re-synthesizes the whole frame every time.** Reproduces
+  what you reference, changes what you name; **never preserves source pixels**; reliably holds
+  **one dominant change per shot**.
+- **No `mode`/`task` API param** — behaviour is driven by **content roles + prompt verbs**.
+  A node-level "mode" is a *client-side* label only.
+- **Donor vs canvas:** `reference` = donor → new render; `edit` = canvas → re-render that
+  *leans* on the source. Edit's "unmentioned stays unchanged" is a **soft bias**, not pixel
+  preservation. Pixel-exact preservation → crop+stitch in our pipeline, not Seedance.
+- **Subject-swap is the middle ground** — edit/reference converge (both regenerate). Default
+  `edit` for max scene fidelity, `reference` to reinterpret the scene too.
+
+### Prompt-craft
+- **Verb routes the task (2222480 L35):** edit/extend use bare `@Video1`; never
+  "reference @Video1". Reference uses "Reference … in @Video1 to generate".
+- **LEAN wins (L54):** avoid redundancy / semantic conflicts; forceful absolutes make it rigid
+  and passthrough-prone. (Our linter bans the CN strict-term `严格`; "strictly" is a *router*,
+  keep the *change* wording lean.)
+- **One dominant change per shot; one camera move per shot** (L91). Stacking two big/temporal
+  effects → one drops. Decouple spatial vs temporal; storyboard into separate shots.
+- **`@Image n` counts image_url items by ARRAY ORDER, not by role (2291680 L102)** → in
+  keyframe modes the frames ARE `@Image1`/`@Image2` (so "from @Image1 to @Image2" bridge
+  prompts are valid).
+- **Multi-image identity (L142):** face/hair ← headshot, body/styling ← full-body. Headshot +
+  full-body beats multi-view (multi-view causes ID drift).
+- **Restyle needs an explicit style word (L165)** or it drifts back to realistic.
+
+### Keyframe / greybox / extension
+- **Keyframe modes are image-only** (no ref videos): first_frame = 1 image, first_last_frame = 2.
+- **"White model" = greybox is an OFFICIAL term (2222480 L204)** — used to stabilize structure
+  across extension/continuation (strip the color/texture layer where drift accumulates). Not a
+  documented *capture* method.
+- **Extension:** activate with the verb `Extend @Video1 forward/backward`. `duration` = the
+  *generated* clip length [4-15] (so `auto_from_ref` makes the extension = input length — it is
+  the extension length, NOT append). The **seam/"jump" is documented**: (A) extension
+  degradation, mottled face color, compounds across continuations (L199-207 → white-model + HD
+  refs + fewer continuations); (B) input/output res-AR mismatch → frame jumps (2291680 L136 →
+  match res + ratio). Deeper: Seedance regenerates → inherent color seam → color-match the seam
+  (CropColorFix / `apply_lab_lowfreq`) or a short low-denoise blend.
+
+### Gotchas / safety
+- **Real faces can't be uploaded (2.0)** → authorized-real-person registration / trusted
+  ≤30-day ModelArk outputs / preset avatars / strip-the-face.
+- **OUTPUT content gate** (post-gen likeness/copyright) is separate from the input gate and
+  **not** asset-bypassable.
+- **Image auto-crop = center-crop** on AR mismatch (chops tall full-body refs) → frame with
+  safe margins or match ratio.
+- **Webhook (`callback_url`) exists** but needs a public endpoint; **concurrency cap
+  auto-queues** the overflow (Enterprise = 10, Individual = 3; 4K = 1).
+- **Multimodal refs blend SEMANTICALLY, not spatially** — can't composite layers; do
+  compositing in our pipeline.
+
+### VP / real-shoot capture (academic; API gates aside)
+Capture what's expensive to *synthesize* (real light transport, micro-detail, subject↔scene
+interaction); avoid baking what's expensive to *reverse* (baked light, spill, fixed BG). LED
+wall = unfakeable interactive light; greenscreen = flexibility but needs relight; greybox =
+environment anchor (geometry/parallax) → photorealize BG + composite the real subject (plate
+authority). Full matrix: `seedance_api_docs/VP_CAPTURE_ACADEMIC_MATRIX.md`.
