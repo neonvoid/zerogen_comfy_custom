@@ -6,6 +6,42 @@ Every value here is a literal quote/figure from the docs unless explicitly tagge
 
 ---
 
+## Working hypothesis / mental model (read this first)
+
+> **Seedance 2.0 is a single generative endpoint that re-synthesizes the whole frame
+> every time. It REPRODUCES what you reference and CHANGES what you name — but it
+> never preserves source pixels, and it reliably holds only ONE complex change per
+> shot. "Modes" are prompt-verb routing into the SAME generator, not different
+> operations — so they converge on easy tasks and fail identically on hard ones.**
+
+Five pillars (evidence-backed):
+1. **One endpoint, no mode switch** — `/contents/generations/tasks`, no mode param;
+   behavior is driven by `role` + prompt verbs. Our `reference/edit/extend/bridge`
+   labels are *client-side framing*, not API modes.
+2. **Always regenerates — zero pixel preservation.** No mask input, no lossless/
+   in-place; docs state re-processing *degrades* pixels (2298881 L201). "Regional
+   repainting/restoration" exists (2298881 L1636) but is *generative*, not pixel-locked.
+3. **One dominant change per shot** — stacking two complex/temporal effects (camera
+   move + time-lapse) drops one (2222480 L91; runtime).
+4. **It reproduces what you reference** — swaps "keep the background" because scene/
+   motion/camera come from `@Video1` and are *faithfully re-rendered*, not preserved.
+5. **Modes converge on simple tasks** — edit ≈ reference for a single-change swap
+   (A/B confirmed); the verb is cosmetic when the task is one clean change.
+
+Falsifiable predictions: one clean change succeeds in any mode; stacking two complex
+changes fails in every mode; no prompt makes output pixel-match the input; the
+`first_frame/last_frame` role is the only smooth-transition path (untested in our gen node).
+
+Practical rule:
+| Goal | Tool |
+|---|---|
+| ONE generative change, faithful re-render of the rest OK | **Seedance** (any mode — pick by verb) |
+| Keep a region **pixel-exact** | **crop + stitch** pipeline (composite onto original) |
+| Camera move + keep an existing effect | **post** (2D reframe on rendered footage) |
+| Smooth keyframe transition | **first/last-frame role** — needs gen-node support (open) |
+
+---
+
 ## Models (Seedance 2.0 series)
 
 | Model | Model ID (literal) | 1080p | 4K |
