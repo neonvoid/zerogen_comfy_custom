@@ -1,6 +1,6 @@
 # Seedance 2.0 — Capabilities, Tasks, Roles (API-evidence-backed)
 
-**Compiled 2026-06-28** by scraping the official BytePlus ModelArk docs (see footnote).
+**Compiled 2026-06-28 · last updated 2026-06-29** by scraping the official BytePlus ModelArk docs (see footnote).
 Every value here is a literal quote/figure from the docs unless explicitly tagged
 `[RUNTIME]` (our own test finding, not in the docs). No inference.
 
