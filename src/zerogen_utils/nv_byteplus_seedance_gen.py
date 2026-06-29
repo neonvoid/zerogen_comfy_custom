@@ -220,9 +220,9 @@ def _build_content(
 
     Keyframe roles (first_frame / last_frame) and reference roles
     (reference_image / reference_video) are MUTUALLY EXCLUSIVE per the Volcengine
-    API — callers must validate with `_validate_keyframe_mode` first. The wire
-    shape of a keyframe item is identical to a reference image; only `role`
-    differs (confirmed against the official SDK sample, doc 2298881 L358-391).
+    API — callers map them with `_resolve_image_roles` first. The wire shape of a
+    keyframe item is identical to a reference image; only `role` differs (confirmed
+    against the official SDK sample, doc 2298881 L358-391).
     """
     content: list[dict] = [{"type": "text", "text": final_prompt}]
     ff = (first_frame_url or "").strip()
@@ -240,43 +240,54 @@ def _build_content(
     return content
 
 
-def _validate_keyframe_mode(
-    *, has_first_frame: bool, has_last_frame: bool, n_images: int, n_videos: int
-) -> str:
-    """Enforce Seedance's mutually-exclusive image modes (doc 2291680 L53 + 2298881).
+# How the single image-URL list maps to API roles (one dropdown instead of
+# separate single/first_frame/last_frame inputs). Seedance's 3 image modes are
+# mutually exclusive (doc 2291680 L53 + 2298881): keyframe modes are image-only.
+_IMAGE_MODES = ["multimodal", "first_frame", "first_last_frame"]
 
-    Returns the resolved mode string (for logging / sidecar). NOTE: this is a
-    CLIENT-SIDE label only — it is never sent to the API. Seedance has one endpoint
-    with no mode/task param; behaviour is driven by content roles + prompt verbs.
-    The label just records which content shape was built:
-      - "bridge"       first_frame + last_frame (smooth interpolation)
-      - "first_frame"  first_frame only (image->video)
-      - "multimodal"   reference_image/_video roles - keyframe-free
-      - "text"         nothing wired
 
-    Raises ValueError (pre-spend) on illegal combos:
-      - last_frame without first_frame
-      - any keyframe role mixed with reference_image / reference_video
+def _resolve_image_roles(mode: str, image_urls: list, n_videos: int):
+    """Map the image-URL list to API roles per the calling `mode`. Returns
+    (reference_image_urls, first_frame_url, last_frame_url). Raises pre-spend on an
+    illegal combo (keyframe modes are image-only and need enough images).
+
+      - multimodal       every image -> reference_image; videos -> reference_video
+      - first_frame      image #1 -> first_frame role (image->video); no ref videos
+      - first_last_frame image #1 -> first_frame, image #2 -> last_frame; no ref videos
     """
-    if has_last_frame and not has_first_frame:
+    if mode not in _IMAGE_MODES:
+        raise ValueError(f"unknown mode {mode!r}; expected one of {_IMAGE_MODES}.")
+    if mode == "multimodal":
+        return image_urls, None, None
+    # Keyframe modes: the images ARE the frames (not reference images), and reference
+    # videos are not allowed (Seedance's image modes don't mix with reference media).
+    if n_videos > 0:
         raise ValueError(
-            "Bridge mode requires BOTH first_frame AND last_frame. Either also wire "
-            "first_frame_asset_url, or clear last_frame_asset_url."
+            f"{mode} mode is image-only — it cannot use reference videos. Clear "
+            f"ref_video_asset_urls, or switch mode to multimodal."
         )
-    if (has_first_frame or has_last_frame) and (n_images > 0 or n_videos > 0):
+    # EXACT cardinality — extra lines in a keyframe mode are almost certainly user
+    # error (they can't be reference images here), so fail pre-spend rather than
+    # silently dropping them into a paid gen the user didn't intend (review finding).
+    if mode == "first_frame":
+        if len(image_urls) != 1:
+            raise ValueError(f"first_frame mode needs EXACTLY 1 image in ref_image_asset_urls (line 1 = first frame); got {len(image_urls)}.")
+        return [], image_urls[0], None
+    # first_last_frame
+    if len(image_urls) != 2:
+        raise ValueError(f"first_last_frame mode needs EXACTLY 2 images in ref_image_asset_urls (line 1 = first frame, line 2 = last frame); got {len(image_urls)}.")
+    return [], image_urls[0], image_urls[1]
+
+
+def _assert_keyframe_prompt_clean(mode: str, prompt: str) -> None:
+    """Keyframe modes have no reference_image/_video entries, so an @ImageN/@VideoN
+    tag in the prompt points at nothing. Fail pre-spend rather than bill a confusing
+    result (review finding)."""
+    if mode != "multimodal" and re.search(r"@(?:Image|Video)\d+", prompt or ""):
         raise ValueError(
-            "first_frame/last_frame modes are MUTUALLY EXCLUSIVE with "
-            "reference_image/reference_video - Seedance's 3 image modes do not mix. "
-            "For an identity anchor alongside a reference video, wire the image to "
-            "reference_image (multimodal mode), not first_frame."
+            f"{mode} mode uses first/last-frame roles, not @ImageN/@VideoN references — "
+            f"remove the tag(s) from the prompt or switch mode to multimodal."
         )
-    if has_last_frame:   # has_first_frame guaranteed by the check above
-        return "bridge"
-    if has_first_frame:
-        return "first_frame"
-    if n_images > 0 or n_videos > 0:
-        return "multimodal"
-    return "text"
 
 
 async def _post_task(session, api_key, payload):
@@ -698,22 +709,28 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
                     default="",
                     tooltip="Generation prompt. @Image1..N / @Video1 ref tags auto-injected if absent.",
                 ),
+                IO.Combo.Input(
+                    "mode",
+                    options=_IMAGE_MODES,
+                    default="multimodal",
+                    tooltip=(
+                        "How the image list maps to API roles. multimodal: every image is a "
+                        "reference_image (@Image1..N) + videos are reference_video (covers reference / "
+                        "edit / extend / combined — those are driven by the prompt verb). first_frame: "
+                        "image line 1 = start frame (image->video; no ref videos). first_last_frame: "
+                        "line 1 = start, line 2 = end frame (no ref videos)."
+                    ),
+                ),
                 IO.String.Input(
                     "ref_image_asset_urls",
                     default="",
                     multiline=True,
                     tooltip=(
-                        "Newline-separated image refs (1-9), one per line, in @Image1..N order. "
-                        "Wire Zerogen_ByteplusImageBatchRegister.joined_urls here. Each is an asset:// id "
-                        "(or HTTPS URL / data: URI). Real-face refs MUST be asset:// (direct image "
-                        "URLs are input-gated). Takes priority over the singular widget."
+                        "Image refs, one asset:// (or HTTPS / data:) per line. multimodal mode: 1-9 "
+                        "reference images in @Image1..N order (wire ByteplusImageBatchRegister.joined_urls; "
+                        "real-face refs MUST be asset://). first_frame mode: line 1 = first frame. "
+                        "first_last_frame mode: line 1 = first, line 2 = last."
                     ),
-                    optional=True,
-                ),
-                IO.String.Input(
-                    "ref_image_asset_url",
-                    default="",
-                    tooltip="Single image ref (asset:// / HTTPS / data:). For the one-ref case. Mutually exclusive with the multi-line list above.",
                     optional=True,
                 ),
                 IO.String.Input(
@@ -721,37 +738,10 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
                     default="",
                     multiline=True,
                     tooltip=(
-                        "Newline-separated reference VIDEOS (1-3), one per line, in @Video1..N order. "
-                        "Each is an asset:// id (or HTTPS URL / data: URI). Already-hosted HTTPS video "
-                        "URLs work directly — no registration/B2 needed. Use multiple to composite refs "
-                        "(e.g. @Video1 = empty scene/environment, @Video2 = cropped subject). Takes "
-                        "priority over the singular widget."
-                    ),
-                    optional=True,
-                ),
-                IO.String.Input(
-                    "ref_video_asset_url",
-                    default="",
-                    tooltip="Single reference VIDEO (asset:// / HTTPS / data:). For the one-video case. Mutually exclusive with the multi-line list above.",
-                    optional=True,
-                ),
-                IO.String.Input(
-                    "first_frame_asset_url",
-                    default="",
-                    tooltip=(
-                        "KEYFRAME mode: starting frame (asset:// / HTTPS / data:). Output coheres with "
-                        "this image (image->video). MUTUALLY EXCLUSIVE with reference images/videos. "
-                        "Register a PNG via ByteplusImageAssetRegister and wire its asset:// here."
-                    ),
-                    optional=True,
-                ),
-                IO.String.Input(
-                    "last_frame_asset_url",
-                    default="",
-                    tooltip=(
-                        "KEYFRAME BRIDGE mode: ending frame (asset:// / HTTPS / data:). Requires "
-                        "first_frame_asset_url too; output smoothly connects first->last. Mutually "
-                        "exclusive with reference images/videos."
+                        "Reference VIDEOS, one asset:// (or HTTPS / data:) per line, in @Video1..N order "
+                        "(1-3). HTTPS video URLs work directly — no registration/B2 needed. Multiple = "
+                        "composite refs (e.g. @Video1 scene + @Video2 subject). Ignored in first_frame / "
+                        "first_last_frame modes (keyframe modes are image-only)."
                     ),
                     optional=True,
                 ),
@@ -878,12 +868,9 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
     async def execute(
         cls,
         prompt: str,
+        mode: str = "multimodal",
         ref_image_asset_urls: str = "",
-        ref_image_asset_url: str = "",
         ref_video_asset_urls: str = "",
-        ref_video_asset_url: str = "",
-        first_frame_asset_url: str = "",
-        last_frame_asset_url: str = "",
         model: str = "Seedance 2.0 Pro",
         resolution: str = "720p",
         ratio: str = "adaptive",
@@ -899,34 +886,30 @@ class Zerogen_ByteplusSeedanceGen(IO.ComfyNode):
         ref_video=None,
         ref_duration_s: float = 0.0,
         slowdown_factor: int = 1,
+        **kwargs,  # sink removed/stale inputs from old saved graphs (don't crash the queue)
     ) -> IO.NodeOutput:
         t_start = time.time()
 
-        image_urls = _parse_ref_urls(ref_image_asset_urls, ref_image_asset_url)
-        video_urls = _parse_ref_urls(ref_video_asset_urls, ref_video_asset_url, kind="video")
-        n_images = len(image_urls)
+        all_image_urls = _parse_ref_urls(ref_image_asset_urls, "")
+        video_urls = _parse_ref_urls(ref_video_asset_urls, "", kind="video")
         n_videos = len(video_urls)
         has_video = n_videos > 0
 
-        # Validate inputs BEFORE submit (R0 review) — fail here, not as a late API reject.
+        # Map the image list to API roles per the calling mode (raises pre-spend on bad combos).
+        image_urls, first_frame_url, last_frame_url = _resolve_image_roles(mode, all_image_urls, n_videos)
+        n_images = len(image_urls)
+        keyframe_mode = mode  # the dropdown IS the mode now
+
+        # Validate counts BEFORE submit (R0 review) — fail here, not as a late API reject.
         if n_images > _MAX_REF_IMAGES:
             raise ValueError(f"Seedance accepts at most {_MAX_REF_IMAGES} reference images; got {n_images}.")
         if n_videos > _MAX_REF_VIDEOS:
             raise ValueError(f"Seedance accepts at most {_MAX_REF_VIDEOS} reference videos; got {n_videos}.")
         # Duration validation is centralized in _resolve_duration (covers all modes).
 
-        # Keyframe modes (first/last frame) are mutually exclusive with reference refs.
-        first_frame_url = (first_frame_asset_url or "").strip()
-        last_frame_url = (last_frame_asset_url or "").strip()
-        keyframe_mode = _validate_keyframe_mode(
-            has_first_frame=bool(first_frame_url),
-            has_last_frame=bool(last_frame_url),
-            n_images=n_images,
-            n_videos=n_videos,
-        )
-
         final_prompt = (prompt or "").strip()
-        if not final_prompt and n_images == 0 and not has_video and not first_frame_url:
+        _assert_keyframe_prompt_clean(mode, final_prompt)
+        if not final_prompt and not (image_urls or video_urls or first_frame_url or last_frame_url):
             raise ValueError("No prompt and no refs — can't submit an empty task.")
         prompt_before = final_prompt
         final_prompt = _auto_inject_tags(final_prompt, n_images, n_videos)

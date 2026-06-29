@@ -41,13 +41,15 @@ from .nv_byteplus_seedance_gen import (
     _MODELS,
     _RATIOS,
     _RESOLUTIONS,
+    _IMAGE_MODES,
+    _assert_keyframe_prompt_clean,
     _auto_inject_tags,
     _build_content,
     _measure_video_duration,
     _parse_ref_urls,
     _post_task,
     _resolve_duration,
-    _validate_keyframe_mode,
+    _resolve_image_roles,
 )
 from .seedance_watcher import ensure_watcher_running
 
@@ -71,23 +73,17 @@ class Zerogen_ByteplusSeedanceSubmit(IO.ComfyNode):
             inputs=[
                 IO.String.Input("prompt", multiline=True, default="",
                                 tooltip="Generation prompt. @Image1..N / @Video1 tags auto-injected if absent."),
+                IO.Combo.Input("mode", options=_IMAGE_MODES, default="multimodal",
+                               tooltip="How the image list maps to roles. multimodal: images = reference_image "
+                                       "(@Image1..N) + videos = reference_video (covers reference/edit/extend/combined "
+                                       "via the prompt verb). first_frame: line 1 = start frame (no ref videos). "
+                                       "first_last_frame: line 1 = start, line 2 = end (no ref videos)."),
                 IO.String.Input("ref_image_asset_urls", multiline=True, default="",
-                                tooltip="Newline-separated image refs (1-9), @Image1..N order. asset:// / HTTPS / data:.",
-                                optional=True),
-                IO.String.Input("ref_image_asset_url", default="",
-                                tooltip="Single image ref. Mutually exclusive with the multi-line list.",
+                                tooltip="Image refs, one asset:// / HTTPS / data: per line. multimodal: 1-9 @Image1..N. "
+                                        "first_frame: line 1 = first frame. first_last_frame: line 1 = first, line 2 = last.",
                                 optional=True),
                 IO.String.Input("ref_video_asset_urls", multiline=True, default="",
-                                tooltip="Newline-separated reference videos (1-3), @Video1..N order.",
-                                optional=True),
-                IO.String.Input("ref_video_asset_url", default="",
-                                tooltip="Single reference video. Mutually exclusive with the multi-line list.",
-                                optional=True),
-                IO.String.Input("first_frame_asset_url", default="",
-                                tooltip="KEYFRAME: starting frame. Mutually exclusive with reference images/videos.",
-                                optional=True),
-                IO.String.Input("last_frame_asset_url", default="",
-                                tooltip="KEYFRAME BRIDGE: ending frame. Requires first_frame_asset_url too.",
+                                tooltip="Reference videos (1-3), one per line, @Video1..N order. Ignored in keyframe modes.",
                                 optional=True),
                 IO.Combo.Input("model", options=list(_MODELS.keys()), default="Seedance 2.0 Pro",
                                tooltip="Seedance model."),
@@ -148,42 +144,43 @@ class Zerogen_ByteplusSeedanceSubmit(IO.ComfyNode):
         )
 
     @classmethod
-    def fingerprint_inputs(cls, seed: int = -1, prompt: str = "", ref_image_asset_urls: str = "",
-                           ref_image_asset_url: str = "", ref_video_asset_urls: str = "",
-                           ref_video_asset_url: str = "", first_frame_asset_url: str = "",
-                           last_frame_asset_url: str = "", model: str = "Seedance 2.0 Pro",
-                           resolution: str = "720p", ratio: str = "adaptive", duration: int = 5,
-                           generate_audio: bool = True, watermark: bool = False,
-                           return_last_frame: bool = True, duration_mode: str = "manual",
-                           ref_duration_s: float = 0.0, **kwargs):  # noqa: ANN001, ANN206
+    def fingerprint_inputs(cls, seed: int = -1, prompt: str = "", mode: str = "multimodal",
+                           ref_image_asset_urls: str = "", ref_video_asset_urls: str = "",
+                           model: str = "Seedance 2.0 Pro", resolution: str = "720p",
+                           ratio: str = "adaptive", duration: int = 5, generate_audio: bool = True,
+                           watermark: bool = False, return_last_frame: bool = True,
+                           duration_mode: str = "manual", ref_video=None, ref_duration_s: float = 0.0,
+                           **kwargs):  # noqa: ANN001, ANN206
         """V3 IS_CHANGED — double-spend guard. Fingerprints EVERY payload-affecting
-        input, so changing the gen (resolution/duration/model/audio/ratio/...) re-submits.
+        input, so changing the gen (mode/resolution/duration/model/audio/ratio/...) re-submits.
         Output-only fields (output_dir/filename_template/label) and watcher settings are
         DELIBERATELY EXCLUDED — renaming or relocating the output must never spend money
-        again (review finding). A fixed seed + identical payload returns the same key →
-        ComfyUI skips the paid re-submit; control_after_generate bumps the seed each queue
-        to fire a fresh job on purpose."""
+        again. CRITICAL: with duration_mode=auto_from_ref the POST duration comes from the
+        MEASURED local ref_video, so we fingerprint the resolved api_duration (review finding:
+        swapping the local clip changed the payload but not the old key -> wrong cache hit).
+        A fixed seed + identical payload returns the same key -> ComfyUI skips the paid
+        re-submit; control_after_generate bumps the seed each queue to fire a fresh job."""
+        effective_ref_dur = _measure_video_duration(ref_video) or float(ref_duration_s or 0.0)
+        api_duration, _note = _resolve_duration(duration_mode, duration, effective_ref_dur)
         return json.dumps({
-            "v": 2, "seed": seed, "prompt": prompt or "",
-            "ref_image_asset_urls": ref_image_asset_urls or "", "ref_image_asset_url": ref_image_asset_url or "",
-            "ref_video_asset_urls": ref_video_asset_urls or "", "ref_video_asset_url": ref_video_asset_url or "",
-            "first_frame_asset_url": first_frame_asset_url or "", "last_frame_asset_url": last_frame_asset_url or "",
-            "model": model, "resolution": resolution, "ratio": ratio, "duration": duration,
-            "generate_audio": bool(generate_audio), "watermark": bool(watermark),
-            "return_last_frame": bool(return_last_frame), "duration_mode": duration_mode,
+            "v": 4, "seed": seed, "prompt": prompt or "", "mode": mode,
+            "ref_image_asset_urls": ref_image_asset_urls or "",
+            "ref_video_asset_urls": ref_video_asset_urls or "",
+            "model": model, "resolution": resolution, "ratio": ratio,
+            "duration": duration, "duration_mode": duration_mode,
             "ref_duration_s": round(float(ref_duration_s or 0.0), 3),
+            "api_duration": api_duration,   # the value the POST actually uses
+            "generate_audio": bool(generate_audio), "watermark": bool(watermark),
+            "return_last_frame": bool(return_last_frame),
         }, sort_keys=True, ensure_ascii=False)
 
     @classmethod
     async def execute(
         cls,
         prompt: str,
+        mode: str = "multimodal",
         ref_image_asset_urls: str = "",
-        ref_image_asset_url: str = "",
         ref_video_asset_urls: str = "",
-        ref_video_asset_url: str = "",
-        first_frame_asset_url: str = "",
-        last_frame_asset_url: str = "",
         model: str = "Seedance 2.0 Pro",
         resolution: str = "720p",
         ratio: str = "adaptive",
@@ -203,25 +200,24 @@ class Zerogen_ByteplusSeedanceSubmit(IO.ComfyNode):
         watcher_poll_interval_s: float = 10.0,
         watcher_verbosity: str = "normal",
         api_key: str = "",
+        **kwargs,  # sink removed/stale inputs from old saved graphs (don't crash the queue)
     ) -> IO.NodeOutput:
         # ---- resolve + validate (all pre-spend) ----
-        image_urls = _parse_ref_urls(ref_image_asset_urls, ref_image_asset_url)
-        video_urls = _parse_ref_urls(ref_video_asset_urls, ref_video_asset_url, kind="video")
-        n_images, n_videos = len(image_urls), len(video_urls)
+        all_image_urls = _parse_ref_urls(ref_image_asset_urls, "")
+        video_urls = _parse_ref_urls(ref_video_asset_urls, "", kind="video")
+        n_videos = len(video_urls)
+        # Map the image list to roles per the calling mode (raises pre-spend on bad combos).
+        image_urls, first_frame_url, last_frame_url = _resolve_image_roles(mode, all_image_urls, n_videos)
+        n_images = len(image_urls)
+        keyframe_mode = mode
         if n_images > _MAX_REF_IMAGES:
             raise ValueError(f"Seedance accepts at most {_MAX_REF_IMAGES} reference images; got {n_images}.")
         if n_videos > _MAX_REF_VIDEOS:
             raise ValueError(f"Seedance accepts at most {_MAX_REF_VIDEOS} reference videos; got {n_videos}.")
 
-        first_frame_url = (first_frame_asset_url or "").strip()
-        last_frame_url = (last_frame_asset_url or "").strip()
-        keyframe_mode = _validate_keyframe_mode(
-            has_first_frame=bool(first_frame_url), has_last_frame=bool(last_frame_url),
-            n_images=n_images, n_videos=n_videos,
-        )
-
         final_prompt = (prompt or "").strip()
-        if not final_prompt and n_images == 0 and n_videos == 0 and not first_frame_url:
+        _assert_keyframe_prompt_clean(mode, final_prompt)
+        if not final_prompt and not (image_urls or video_urls or first_frame_url or last_frame_url):
             raise ValueError("No prompt and no refs — can't submit an empty task.")
         final_prompt = _auto_inject_tags(final_prompt, n_images, n_videos)
 
